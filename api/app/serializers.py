@@ -234,3 +234,22 @@ class FriendRequestInputSerializer(serializers.Serializer):
     """Body for POST /api/friends/requests/."""
 
     username = serializers.CharField(max_length=150)
+
+
+# --- Place interest (Phase 3) ---------------------------------------------
+
+class PlaceInterestInputSerializer(serializers.Serializer):
+    """Optional body for POST /api/places/<id>/interest/. Needs `place` in the context."""
+
+    via_saved_place_id = serializers.IntegerField(required=False, allow_null=True)
+
+    def validate_via_saved_place_id(self, value):
+        """Turn the id into the SavedPlace. It must be someone else's that the user can see."""
+        if value is None:
+            return None
+        saved = permissions.saved_place_for_interest(self.context['request'].user, value)
+        if saved is None:
+            raise serializers.ValidationError('Saved place not found.')
+        if saved.place_id != self.context['place'].pk:
+            raise serializers.ValidationError('That saved place is for a different place.')
+        return saved

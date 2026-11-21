@@ -1,7 +1,7 @@
 from django.contrib import admin
 
-from .models import (Circle, CircleMembership, Friendship, NearbySearchCache, Place, PlaceCard, SavedPlace, Tag,
-                     TextSearchCache)
+from .models import (Circle, CircleMembership, Friendship, NearbySearchCache, Place, PlaceCard, PlaceInterest,
+                     SavedPlace, Tag, TextSearchCache)
 
 
 @admin.register(Place)
@@ -68,3 +68,11 @@ class FriendshipAdmin(admin.ModelAdmin):
     list_filter = ('status',)
     search_fields = ('from_user__username', 'to_user__username')
     list_select_related = ('from_user', 'to_user')
+
+
+@admin.register(PlaceInterest)
+class PlaceInterestAdmin(admin.ModelAdmin):
+    list_display = ('user', 'place', 'via_saved_place', 'created_at')
+    search_fields = ('user__username', 'place__name')
+    list_select_related = ('user', 'place')
+    raw_id_fields = ('place', 'via_saved_place')

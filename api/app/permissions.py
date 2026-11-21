@@ -16,7 +16,7 @@ their visibility (`visible_*`):
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 
-from .models import Circle, Friendship, SavedPlace, Tag, Visibility
+from .models import Circle, Friendship, PlaceInterest, SavedPlace, Tag, Visibility
 
 
 def own_saved_places(user):
@@ -92,3 +92,32 @@ def _visible_q(viewer, owner_field):
 def visible_saved_places(viewer):
     """Every saved place `viewer` is allowed to see, going by each one's own visibility."""
     return SavedPlace.objects.filter(_visible_q(viewer, 'user'))
+
+
+# --- Place interest (Phase 3) ---------------------------------------------
+
+def own_interests(user):
+    """The user's own place interests, which only they can add or remove."""
+    return PlaceInterest.objects.filter(user=user)
+
+
+def interested_for_card(user, place):
+    """Whether the user has marked interest in `place` (False when not logged in)."""
+    if user is None or not user.is_authenticated:
+        return False
+    return own_interests(user).filter(place=place).exists()
+
+
+def friends_interested_count(user, place):
+    """How many of the user's accepted friends are interested in `place`. 0 when not logged in.
+
+    Checked live, so unfriending someone drops them from the count straight away.
+    """
+    if user is None or not user.is_authenticated:
+        return 0
+    return PlaceInterest.objects.filter(place=place, user__in=friend_ids(user)).count()
+
+
+def saved_place_for_interest(user, saved_place_id):
+    """Someone else's saved place that `user` can see and so may mark interest from, else None."""
+    return visible_saved_places(user).exclude(user=user).filter(pk=saved_place_id).first()

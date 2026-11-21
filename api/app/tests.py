@@ -539,7 +539,7 @@ from .models import PlaceCard
 from .services import place_card as card_service
 
 CARD_KEYS = {'id', 'name', 'bio', 'rating', 'rating_count', 'price_range', 'hours',
-             'nearest_t', 'friends_interested', 'saved'}
+             'nearest_t', 'friends_interested', 'interested', 'saved'}
 NEAREST_T = {'stop': 'State', 'lines': ['Orange', 'Blue'], 'walk_min': 4}
 DETAILS = {
     'rating': 4.5, 'rating_count': 48210, 'price_level': 'PRICE_LEVEL_MODERATE',
@@ -1526,3 +1526,131 @@ class VisibilityTests(LoggedInTestCase):
             self.saved('friends', place=p).tags.add(tag)
         with self.assertNumQueries(3):  # user, saved places + places, tags
             self.client.get(f'/api/users/{self.owner.id}/saved/')
+
+
+# --- Place interest + friends interested on the card (step 19) -----------
+
+from .models import PlaceInterest
+
+
+@umock.patch.object(card_service, '_fetch_details', return_value=None)
+@umock.patch.object(card_service, '_fetch_wiki', return_value=None)
+@umock.patch.object(card_service, '_fetch_nearest_t', return_value={})
+@umock.patch.object(card_service.llm, 'write_bio', return_value='bio')
+class PlaceInterestTests(LoggedInTestCase):
+    """"matt" (self.user) is logged in. "sam" (self.other) is his friend; "stranger" isn't."""
+
+    def setUp(self):
+        super().setUp()
+        Friendship.objects.create(from_user=self.other, to_user=self.user, status=Friendship.STATUS_ACCEPTED)
+        self.stranger = User.objects.create_user('stranger')
+        self.url = f'/api/places/{self.place.id}/interest/'
+        self.card_url = f'/api/places/{self.place.id}/'
+
+    def interest(self, user, place=None):
+        return PlaceInterest.objects.create(user=user, place=place or self.place)
+
+    def card(self):
+        return self.client.get(self.card_url).json()
+
+    def test_mark_and_unmark(self, *mocks):
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json(), {'interested': True, 'via_saved_place_id': None, 'friends_interested': 0})
+        self.assertTrue(self.card()['interested'])
+
+        self.assertEqual(self.client.delete(self.url).status_code, 204)
+        self.assertFalse(PlaceInterest.objects.exists())
+        self.assertFalse(self.card()['interested'])
+        self.assertEqual(self.client.delete(self.url).status_code, 204)  # unmarking twice is fine
+
+    def test_marking_twice_returns_existing(self, *mocks):
+        self.client.post(self.url)
+        response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(PlaceInterest.objects.count(), 1)
+
+    def test_unknown_place_and_login(self, *mocks):
+        self.assertEqual(self.client.post('/api/places/9999/interest/').status_code, 404)
+        self.assertEqual(self.client.delete('/api/places/9999/interest/').status_code, 404)
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.post(self.url).status_code, 401)
+        self.assertEqual(self.client.delete(self.url).status_code, 401)
+
+    def test_unmark_only_touches_mine(self, *mocks):
+        self.interest(self.other)
+        self.client.delete(self.url)
+        self.assertTrue(PlaceInterest.objects.filter(user=self.other).exists())
+
+    def test_card_counts_only_accepted_friends(self, *mocks):
+        self.interest(self.other)                                  # friend: counts
+        self.interest(self.stranger)                               # not a friend
+        pending = User.objects.create_user('pending')
+        Friendship.objects.create(from_user=pending, to_user=self.user)  # not accepted yet
+        self.interest(pending)
+        self.interest(self.user)                                   # me: not a friend of myself
+        self.interest(self.other, place=self.place2)               # a different place
+        body = self.card()
+        self.assertEqual(body['friends_interested'], 1)
+        self.assertTrue(body['interested'])
+
+    def test_count_works_both_friendship_directions(self, *mocks):
+        Friendship.objects.create(from_user=self.user, to_user=self.stranger, status=Friendship.STATUS_ACCEPTED)
+        self.interest(self.other)
+        self.interest(self.stranger)
+        self.assertEqual(self.card()['friends_interested'], 2)
+
+    def test_count_is_live(self, *mocks):
+        self.interest(self.other)
+        self.assertEqual(self.card()['friends_interested'], 1)
+        perms.friendships_between(self.user, self.other).delete()
+        self.assertEqual(self.card()['friends_interested'], 0)
+
+    def test_logged_out_card(self, *mocks):
+        self.interest(self.other)
+        self.client.force_authenticate(None)
+        body = self.card()
+        self.assertEqual(body['friends_interested'], 0)
+        self.assertFalse(body['interested'])
+
+    def test_mark_response_has_friend_count(self, *mocks):
+        self.interest(self.other)
+        self.assertEqual(self.client.post(self.url).json()['friends_interested'], 1)
+
+    # --- via a friend's saved place ---
+
+    def test_via_visible_saved_place(self, *mocks):
+        theirs = SavedPlace.objects.create(user=self.other, place=self.place, visibility='friends')
+        response = self.client.post(self.url, {'via_saved_place_id': theirs.id})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()['via_saved_place_id'], theirs.id)
+        self.assertEqual(PlaceInterest.objects.get(user=self.user).via_saved_place, theirs)
+
+    def test_via_hidden_saved_place_is_rejected(self, *mocks):
+        private = SavedPlace.objects.create(user=self.other, place=self.place, visibility='private')
+        response = self.client.post(self.url, {'via_saved_place_id': private.id})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {'via_saved_place_id': ['Saved place not found.']})
+        self.assertEqual(self.client.post(self.url, {'via_saved_place_id': 9999}).status_code, 400)
+        self.assertFalse(PlaceInterest.objects.exists())
+
+    def test_via_strangers_friends_only_saved_place_is_rejected(self, *mocks):
+        theirs = SavedPlace.objects.create(user=self.stranger, place=self.place, visibility='friends')
+        self.assertEqual(self.client.post(self.url, {'via_saved_place_id': theirs.id}).status_code, 400)
+
+    def test_via_saved_place_for_another_place_is_rejected(self, *mocks):
+        theirs = SavedPlace.objects.create(user=self.other, place=self.place2, visibility='public')
+        response = self.client.post(self.url, {'via_saved_place_id': theirs.id})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('different place', response.json()['via_saved_place_id'][0])
+
+    def test_via_my_own_saved_place_is_rejected(self, *mocks):
+        mine = SavedPlace.objects.create(user=self.user, place=self.place, visibility='public')
+        self.assertEqual(self.client.post(self.url, {'via_saved_place_id': mine.id}).status_code, 400)
+
+    def test_unsaving_keeps_the_interest(self, *mocks):
+        theirs = SavedPlace.objects.create(user=self.other, place=self.place, visibility='friends')
+        self.client.post(self.url, {'via_saved_place_id': theirs.id})
+        theirs.delete()
+        interest = PlaceInterest.objects.get(user=self.user)
+        self.assertIsNone(interest.via_saved_place)

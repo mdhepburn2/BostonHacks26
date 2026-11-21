@@ -78,6 +78,7 @@ Both scan and search end here.
 1. **Place details:** if the `Place` doesn't have details yet, or they're older than 7 days, call Google Place Details for rating, rating count, price level and opening hours and store them on the `Place`. Only fetch details when a card is opened, never for every nearby candidate, since these fields bill at a higher-priced tier.
 2. **Card cache:** check `PlaceCard` for this place. On a miss, gather facts (stored Place data + Wikipedia summary + nearest MBTA stop), have the LLM write the bio, and save it. The LLM must use **only the provided facts**.
 3. **Friends interested (live, never cached):** if the request is authenticated, count the requester's accepted friends who have a `PlaceInterest` on this place. If not authenticated, return 0.
+   `interested` (whether the requester has a `PlaceInterest` here) is live too; false when not authenticated.
 4. Assemble the response from the `Place` fields + `PlaceCard` + the live count.
 
 ## Core rule: the database is the cache
@@ -172,6 +173,7 @@ Don't change these shapes without telling the frontend team. All URLs are under 
   "hours": ["Monday: 9:00 AM - 5:00 PM", "..."],
   "nearest_t": { "stop": "", "lines": [""], "walk_min": 0 },
   "friends_interested": 0,
+  "interested": false,
   "saved": { "id": 0, "visited": false, "visited_at": null }
 }
 ```
@@ -179,6 +181,7 @@ Don't change these shapes without telling the frontend team. All URLs are under 
 - `price_range` is Google's price level mapped to `"$"` through `"$$$$"`, or `null`.
 - `saved` is `null` if the user hasn't saved the place or isn't logged in.
 - `friends_interested` is always present and is 0 when not logged in.
+- `interested` is whether I've marked interest in the place; always present, false when not logged in.
 
 ### Phase 2: accounts, saved places, tags (auth required)
 
@@ -274,6 +277,13 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 - 404 for an unknown user, and an empty list (not 403) when nothing is visible.
 - Visibility is checked live: unfriending or leaving a circle hides things straight away. A `circle` item whose circle was deleted is owner-only.
 - Use `visible_saved_places(viewer)` from `app/permissions.py` for every read of someone else's saved places. Edits stay owner-only (`own_saved_places`, `own_tags`).
+
+**Place interest:**
+- `POST /api/places/<id>/interest/` marks me interested. Optional body: `via_saved_place_id`, a friend's saved place for this same place that I'm allowed to see (`visible_saved_places`); my own, a hidden one, an unknown id or one for a different place is 400. Returns 201, or 200 with the existing interest (unchanged) if I was already interested.
+- Response: `{"interested": true, "via_saved_place_id": null, "friends_interested": 0}`, so the app can update the card without reloading it.
+- `DELETE /api/places/<id>/interest/` returns 204, including when I wasn't interested. Both are 404 for an unknown place.
+- Unsaving the saved place an interest came from keeps the interest (`via_saved_place` becomes null).
+- Interest helpers (`own_interests`, `interested_for_card`, `friends_interested_count`, `saved_place_for_interest`) live in `app/permissions.py`. The count only includes accepted friends and is checked live.
 
 **Friend request shape:**
 ```json

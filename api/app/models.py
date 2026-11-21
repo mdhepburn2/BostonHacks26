@@ -199,3 +199,26 @@ class Friendship(models.Model):
 
     def __str__(self):
         return f'{self.from_user} -> {self.to_user} ({self.status})'
+
+
+class PlaceInterest(models.Model):
+    """A user marking a place as somewhere they'd like to go.
+
+    `via_saved_place` is set when they marked it from a friend's saved place (and
+    only if they could see that saved place). Friends' interest is counted live on
+    the place card; see app/permissions.py.
+    """
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='place_interests')
+    place = models.ForeignKey(Place, on_delete=models.CASCADE, related_name='interests')
+    # If that saved place is unsaved later, the interest stays.
+    via_saved_place = models.ForeignKey(SavedPlace, on_delete=models.SET_NULL, null=True, blank=True,
+                                        related_name='interests')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        constraints = [models.UniqueConstraint(fields=['user', 'place'], name='unique_place_interest')]
+
+    def __str__(self):
+        return f'{self.user} interested in {self.place}'

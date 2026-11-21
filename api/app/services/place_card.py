@@ -8,8 +8,9 @@
    save the card. Details, the Wikipedia lookup and the MBTA lookup run in parallel.
    A cached card with no T stop yet (MBTA failed last time, or the card is from
    before step 11) gets one on its next open.
-3. `saved` (the requester's SavedPlace) and friends interested are live per
-   request. Friends interested is always 0 until step 19.
+3. `saved` (the requester's SavedPlace), `interested` (whether the requester
+   marked interest) and `friends_interested` (how many of their accepted friends
+   did) are live per request and never cached. Logged out: null / false / 0.
 
 Failures never crash the request:
 - details fail     -> card keeps whatever it had (null rating/price/hours on first open)
@@ -85,7 +86,9 @@ def get_card(place, user=None):
 
     logger.info('place card %d %r (details=%s, wiki=%s, mbta=%s, card=%s) timings_ms=%s',
                 place.id, place.name, need_details, need_wiki, need_mbta, card_status, timings)
-    return _response(place, card, permissions.saved_for_card(user, place))
+    return _response(place, card, permissions.saved_for_card(user, place),
+                     interested=permissions.interested_for_card(user, place),
+                     friends_interested=permissions.friends_interested_count(user, place))
 
 
 # --- Place details --------------------------------------------------------
@@ -225,7 +228,7 @@ def _facts(place):
 
 # --- Response -------------------------------------------------------------
 
-def _response(place, card, saved=None):
+def _response(place, card, saved=None, interested=False, friends_interested=0):
     return {
         'id': place.id,
         'name': place.name,
@@ -235,7 +238,8 @@ def _response(place, card, saved=None):
         'price_range': google_places.price_range(place.price_level),
         'hours': place.opening_hours or None,
         'nearest_t': card.nearest_t or None,  # {} means "no T stop nearby"
-        'friends_interested': 0,      # step 19
+        'friends_interested': friends_interested,
+        'interested': interested,
         'saved': {'id': saved.id, 'visited': saved.visited, 'visited_at': saved.visited_at} if saved else None,
     }
 

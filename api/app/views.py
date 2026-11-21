@@ -14,9 +14,9 @@ from rest_framework.response import Response
 from rest_framework.views import exception_handler as drf_exception_handler
 
 from . import permissions
-from .models import Friendship, Place
+from .models import Friendship, Place, PlaceInterest
 from .serializers import (FriendRequestInputSerializer, FriendRequestSerializer, IdentifyInputSerializer,
-                          LoginSerializer, RegisterSerializer, SavedPlaceSerializer, SearchInputSerializer,
+                          LoginSerializer, PlaceInterestInputSerializer, RegisterSerializer, SavedPlaceSerializer, SearchInputSerializer,
                           TagSerializer, UserSerializer, UserShortSerializer)
 from .services.http import ExternalAPIError
 from .services.identify import identify as identify_photo
@@ -333,3 +333,37 @@ def user_saved_places(request, user_id):
     if owner is None:
         return Response({'detail': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
     return _saved_list(permissions.visible_saved_places(request.user).filter(user=owner), request.query_params)
+
+
+# --- Place interest (Phase 3) ---------------------------------------------
+
+@api_view(['POST', 'DELETE'])
+def place_interest(request, place_id):
+    """Mark / unmark interest in a place. Returns the live state for the card's button and count."""
+    place = Place.objects.filter(pk=place_id).first()
+    if place is None:
+        return Response({'detail': 'Place not found.'}, status=status.HTTP_404_NOT_FOUND)
+    mine = permissions.own_interests(request.user)
+
+    if request.method == 'DELETE':
+        mine.filter(place=place).delete()  # unmarking twice is fine
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    data = PlaceInterestInputSerializer(data=request.data, context={'request': request, 'place': place})
+    data.is_valid(raise_exception=True)
+    # Marking a place you're already interested in keeps the existing interest unchanged.
+    interest = mine.filter(place=place).first()
+    status_code = status.HTTP_200_OK
+    if interest is None:
+        try:
+            with transaction.atomic():
+                interest = PlaceInterest.objects.create(user=request.user, place=place,
+                                                        via_saved_place=data.validated_data.get('via_saved_place_id'))
+            status_code = status.HTTP_201_CREATED
+        except IntegrityError:  # a double tap created it in between
+            interest = mine.get(place=place)
+    return Response({
+        'interested': True,
+        'via_saved_place_id': interest.via_saved_place_id,
+        'friends_interested': permissions.friends_interested_count(request.user, place),
+    }, status=status_code)
