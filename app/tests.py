@@ -92,29 +92,6 @@ class SearchTests(APITestCase):
         self.assertEqual(self.client.get(self.url, {'q': 'library', 'lat': 42.36}).status_code, 400)
 
 
-class PlaceCardTests(APITestCase):
-    def test_returns_contract_shape(self):
-        response = self.client.get('/api/places/1/')
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(
-            set(body),
-            {'id', 'name', 'bio', 'rating', 'rating_count', 'price_range', 'hours',
-             'nearest_t', 'friends_interested', 'saved'},
-        )
-        self.assertEqual(set(body['nearest_t']), {'stop', 'lines', 'walk_min'})
-        self.assertEqual(body['friends_interested'], 0)
-        self.assertIsNone(body['saved'])
-
-    def test_place_without_google_data_has_nulls(self):
-        body = self.client.get('/api/places/5/').json()
-        for key in ('rating', 'rating_count', 'price_range', 'hours'):
-            self.assertIsNone(body[key])
-
-    def test_unknown_place_is_404(self):
-        self.assertEqual(self.client.get('/api/places/9999/').status_code, 404)
-
-
 # --- Candidate generation (step 6) ----------------------------------------
 
 from datetime import timedelta
@@ -545,3 +522,202 @@ class SearchServiceTests(APITestCase):
         response = self.get()
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json()['results']), 2)
+
+
+# --- Place card (step 10) -------------------------------------------------
+
+from .models import PlaceCard
+from .services import place_card as card_service
+
+CARD_KEYS = {'id', 'name', 'bio', 'rating', 'rating_count', 'price_range', 'hours',
+             'nearest_t', 'friends_interested', 'saved'}
+NEAREST_T = {'stop': 'State', 'lines': ['Orange', 'Blue'], 'walk_min': 4}
+DETAILS = {
+    'rating': 4.5, 'rating_count': 48210, 'price_level': 'PRICE_LEVEL_MODERATE',
+    'opening_hours': ['Monday: 10:00 AM - 9:00 PM'],
+}
+
+
+@umock.patch.object(card_service.llm, 'write_bio', return_value='A historic market hall.')
+@umock.patch.object(card_service.wiki, 'summary', return_value='Faneuil Hall is a marketplace.')
+@umock.patch.object(card_service.wiki, 'geosearch')
+@umock.patch.object(card_service.google_places, 'place_details', return_value=DETAILS)
+class PlaceCardTests(APITestCase):
+    def setUp(self):
+        self.place = Place.objects.create(
+            external_id='g_faneuil', source='google', name='Faneuil Hall Marketplace',
+            address='4 S Market St', lat=42.3600, lng=-71.0568,
+            types=['tourist_attraction', 'market'], raw_data={'primaryType': 'market'},
+        )
+        self.url = f'/api/places/{self.place.id}/'
+        patcher = umock.patch.object(card_service.mbta, 'nearest_stop', return_value=NEAREST_T)
+        self.nearest = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_first_open_fetches_everything_and_caches(self, details, geo, summary, bio):
+        geo.return_value = [w(1, 'Faneuil Hall', 42.3601, -71.0567)]
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(set(body), CARD_KEYS)
+        self.assertEqual(body['bio'], 'A historic market hall.')
+        self.assertEqual(body['rating'], 4.5)
+        self.assertEqual(body['price_range'], '$$')
+        self.assertEqual(body['hours'], ['Monday: 10:00 AM - 9:00 PM'])
+        self.assertEqual(body['nearest_t'], NEAREST_T)
+        self.assertEqual(body['friends_interested'], 0)
+        self.assertIsNone(body['saved'])
+
+        details.assert_called_once_with('g_faneuil')
+        self.nearest.assert_called_once_with(42.3600, -71.0568)
+        summary.assert_called_once_with('Faneuil Hall')
+        facts = bio.call_args.args[0]
+        self.assertEqual(facts['wikipedia_summary'], 'Faneuil Hall is a marketplace.')
+        self.assertEqual(facts['kind'], 'market')
+
+        self.place.refresh_from_db()
+        self.assertEqual(self.place.wiki_title, 'Faneuil Hall')
+        self.assertIsNotNone(self.place.details_fetched_at)
+        self.assertTrue(PlaceCard.objects.filter(place=self.place).exists())
+
+    def test_second_open_makes_no_external_calls(self, details, geo, summary, bio):
+        geo.return_value = []
+        self.client.get(self.url)
+        for m in (details, geo, summary, bio, self.nearest):
+            m.reset_mock()
+        body = self.client.get(self.url).json()
+        self.assertEqual(body['bio'], 'A historic market hall.')
+        self.assertEqual(body['nearest_t'], NEAREST_T)
+        for m in (details, geo, summary, bio, self.nearest):
+            m.assert_not_called()
+
+    def test_stale_details_are_refreshed(self, details, geo, summary, bio):
+        geo.return_value = []
+        self.client.get(self.url)
+        Place.objects.update(details_fetched_at=timezone.now() - timedelta(days=8))
+        details.return_value = {**DETAILS, 'rating': 4.7}
+        bio.reset_mock()
+        self.assertEqual(self.client.get(self.url).json()['rating'], 4.7)
+        self.assertEqual(details.call_count, 2)
+        bio.assert_not_called()
+
+    def test_wiki_place_skips_details_and_uses_its_title(self, details, geo, summary, bio):
+        place = Place.objects.create(external_id='wiki:5', source='wiki', name='Boston Common',
+                                     lat=42.3551, lng=-71.0657, wiki_title='Boston Common')
+        body = self.client.get(f'/api/places/{place.id}/').json()
+        for key in ('rating', 'rating_count', 'price_range', 'hours'):
+            self.assertIsNone(body[key])
+        details.assert_not_called()
+        geo.assert_not_called()
+        summary.assert_called_once_with('Boston Common')
+
+    def test_details_failure_returns_nulls(self, details, geo, summary, bio):
+        details.side_effect = ExternalAPIError('down')
+        geo.return_value = []
+        body = self.client.get(self.url).json()
+        self.assertIsNone(body['rating'])
+        self.assertIsNone(body['hours'])
+        self.assertEqual(body['bio'], 'A historic market hall.')
+        self.place.refresh_from_db()
+        self.assertIsNone(self.place.details_fetched_at)  # retried next open
+
+    def test_bio_failure_falls_back_to_wiki_and_does_not_cache(self, details, geo, summary, bio):
+        geo.return_value = [w(1, 'Faneuil Hall', 42.3601, -71.0567)]
+        bio.side_effect = ExternalAPIError('down')
+        body = self.client.get(self.url).json()
+        self.assertEqual(body['bio'], 'Faneuil Hall is a marketplace.')
+        self.assertFalse(PlaceCard.objects.exists())
+
+        bio.side_effect = None
+        self.assertEqual(self.client.get(self.url).json()['bio'], 'A historic market hall.')
+        self.assertTrue(PlaceCard.objects.exists())
+
+    def test_wikipedia_failure_still_writes_bio(self, details, geo, summary, bio):
+        geo.side_effect = ExternalAPIError('down')
+        body = self.client.get(self.url).json()
+        self.assertEqual(body['bio'], 'A historic market hall.')
+        self.assertNotIn('wikipedia_summary', bio.call_args.args[0])
+
+    def test_unrelated_nearby_article_is_ignored(self, details, geo, summary, bio):
+        geo.return_value = [w(9, 'Quincy Market', 42.3601, -71.0560)]
+        self.client.get(self.url)
+        summary.assert_not_called()
+
+    def test_unknown_place_is_404(self, *_):
+        self.assertEqual(self.client.get('/api/places/9999/').status_code, 404)
+
+    def test_mbta_failure_is_null_and_retried_on_cached_card(self, details, geo, summary, bio):
+        geo.return_value = []
+        self.nearest.side_effect = ExternalAPIError('down')
+        body = self.client.get(self.url).json()
+        self.assertIsNone(body['nearest_t'])
+        self.assertTrue(PlaceCard.objects.exists())  # bio still cached
+
+        self.nearest.side_effect = None
+        bio.reset_mock()
+        self.assertEqual(self.client.get(self.url).json()['nearest_t'], NEAREST_T)
+        self.assertEqual(PlaceCard.objects.get().nearest_t, NEAREST_T)
+        bio.assert_not_called()
+
+    def test_no_stop_nearby_is_null_and_not_asked_again(self, details, geo, summary, bio):
+        geo.return_value = []
+        self.nearest.return_value = None
+        self.assertIsNone(self.client.get(self.url).json()['nearest_t'])
+        self.assertIsNone(self.client.get(self.url).json()['nearest_t'])
+        self.assertEqual(self.nearest.call_count, 1)
+
+
+from .services import mbta
+
+
+def stop(name, lat, lng, parent='place-state'):
+    rel = {'parent_station': {'data': {'id': parent, 'type': 'stop'}}} if parent else {}
+    return {'id': '70042', 'attributes': {'name': name, 'latitude': lat, 'longitude': lng},
+            'relationships': rel}
+
+
+class MbtaTests(TestCase):
+    def call(self, responses):
+        with umock.patch.object(mbta, 'request_json', side_effect=responses) as req:
+            return mbta.nearest_stop(42.3600, -71.0568), req
+
+    def test_nearest_stop_with_lines(self):
+        routes = {'data': [{'id': 'Orange'}, {'id': 'Green-B'}, {'id': 'Green-C'}]}
+        out, req = self.call([{'data': [stop('State', 42.358978, -71.057598)]}, routes])
+        self.assertEqual(out['stop'], 'State')
+        self.assertEqual(out['lines'], ['Orange', 'Green'])
+        self.assertEqual(out['walk_min'], 3)  # ~130m straight line, padded 1.3x at 80m/min
+        self.assertEqual(req.call_args_list[1].kwargs['params']['filter[stop]'], 'place-state')
+
+    def test_stop_without_parent_uses_its_own_id(self):
+        out, req = self.call([{'data': [stop('X', 42.36, -71.0568, parent=None)]}, {'data': []}])
+        self.assertEqual(req.call_args_list[1].kwargs['params']['filter[stop]'], '70042')
+        self.assertEqual(out['walk_min'], 1)
+
+    def test_no_stops_returns_none(self):
+        out, req = self.call([{'data': []}])
+        self.assertIsNone(out)
+        self.assertEqual(req.call_count, 1)
+
+    def test_bad_shape_raises(self):
+        with self.assertRaises(ExternalAPIError):
+            self.call([{'data': [{'id': '1', 'attributes': {}}]}])
+
+    def test_walk_minutes(self):
+        self.assertEqual(mbta.walk_minutes(0), 1)
+        self.assertEqual(mbta.walk_minutes(400), 7)
+
+
+class BioValidationTests(TestCase):
+    def test_collapses_whitespace(self):
+        self.assertEqual(llm._validate_bio({'bio': '  A  place.\n Nice. '}), 'A place. Nice.')
+
+    def test_rejects_bad_shapes(self):
+        for data in ({}, {'bio': ''}, {'bio': '   '}, {'bio': 3}, {'bio': 'x' * 900}):
+            with self.assertRaises(ExternalAPIError):
+                llm._validate_bio(data)
+
+    def test_prompt_contains_facts(self):
+        with self.settings(LLM_API_KEY='k'), umock.patch.object(llm, '_generate', return_value={'bio': 'Hi.'}) as gen:
+            self.assertEqual(llm.write_bio({'name': 'Old State House'}), 'Hi.')
+        self.assertIn('Old State House', gen.call_args.kwargs['parts'][0]['text'])

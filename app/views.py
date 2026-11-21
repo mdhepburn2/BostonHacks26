@@ -4,10 +4,11 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+from .models import Place
 from .serializers import IdentifyInputSerializer, SearchInputSerializer
-from .services import mock
 from .services.http import ExternalAPIError
 from .services.identify import identify as identify_photo
+from .services.place_card import get_card
 from .services.search import search_places
 
 
@@ -16,10 +17,6 @@ from .services.search import search_places
 def health(request):
     return Response({'status': 'ok'})
 
-
-# Phase 1 place endpoints. The place card still returns mock data
-# (app/services/mock.py) with the real response shape; step 10 swaps it
-# for the real service.
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -53,7 +50,7 @@ def place_search(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def place_detail(request, place_id):
-    card = mock.place_card(place_id)
-    if card is None:
+    place = Place.objects.filter(pk=place_id).first()
+    if place is None:
         return Response({'detail': 'Place not found.'}, status=status.HTTP_404_NOT_FOUND)
-    return Response(card)
+    return Response(get_card(place))

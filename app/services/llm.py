@@ -1,4 +1,4 @@
-"""Gemini calls: the scan flow's vision match (bio writing comes in step 10).
+"""Gemini calls: the scan flow's vision match and the place card bio.
 
 Every call asks for structured JSON output and the response is validated
 before anyone uses it. Anything wrong (missing key, network error, bad JSON,
@@ -45,6 +45,26 @@ VISION_SCHEMA = {
     },
     'required': ['ranked', 'confidence'],
 }
+
+
+BIO_PROMPT = """Write a short bio for a place card in an app for people exploring Boston on foot.
+
+Here are the ONLY facts you may use, as JSON:
+{facts}
+
+Rules:
+- Use only the facts above. Do not add dates, history, names, awards or details that aren't in them, even if you think you know them.
+- 2 to 4 sentences, under 80 words. Friendly and plain, no marketing language, no emojis.
+- Don't repeat the rating, rating count or price range as numbers; the card already shows them.
+- If the facts are thin, write one or two sentences saying what kind of place it is and where it is. That's fine.
+"""
+
+BIO_SCHEMA = {
+    'type': 'OBJECT',
+    'properties': {'bio': {'type': 'STRING'}},
+    'required': ['bio'],
+}
+BIO_MAX_CHARS = 800
 
 
 def prepare_image(file):
@@ -104,6 +124,23 @@ def _validate_vision(data, n_candidates):
     if not indices:
         confidence = 0.0
     return {'ranked': indices[:3], 'confidence': confidence}
+
+
+def write_bio(facts):
+    """Ask Gemini for a short bio built only from `facts` (a dict). Returns the bio string."""
+    prompt = BIO_PROMPT.format(facts=json.dumps(facts, ensure_ascii=False, indent=2))
+    data = _generate(parts=[{'text': prompt}], schema=BIO_SCHEMA, label='gemini.bio')
+    return _validate_bio(data)
+
+
+def _validate_bio(data):
+    bio = data.get('bio')
+    if not isinstance(bio, str) or not bio.strip():
+        raise ExternalAPIError(f'gemini.bio returned an unexpected shape: {data!r}')
+    bio = ' '.join(bio.split())
+    if len(bio) > BIO_MAX_CHARS:
+        raise ExternalAPIError(f'gemini.bio returned {len(bio)} chars, max {BIO_MAX_CHARS}')
+    return bio
 
 
 def _generate(parts, schema, label):
