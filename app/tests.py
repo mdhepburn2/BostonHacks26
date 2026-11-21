@@ -250,3 +250,79 @@ class NameMatchTests(TestCase):
     def test_non_matches(self):
         self.assertFalse(candidates.names_match('Park', 'Park Street Church'))
         self.assertFalse(candidates.names_match('Union Oyster House', 'Old State House'))
+
+
+# --- Heading filter (step 7) ----------------------------------------------
+
+from types import SimpleNamespace
+
+from . import geo
+
+
+def pt(name, lat, lng):
+    return SimpleNamespace(name=name, lat=lat, lng=lng)
+
+
+class BearingTests(TestCase):
+    def test_cardinal_directions(self):
+        lat, lng = 42.36, -71.06
+        self.assertAlmostEqual(geo.bearing_deg(lat, lng, lat + 0.01, lng), 0, delta=0.5)
+        self.assertAlmostEqual(geo.bearing_deg(lat, lng, lat, lng + 0.01), 90, delta=0.5)
+        self.assertAlmostEqual(geo.bearing_deg(lat, lng, lat - 0.01, lng), 180, delta=0.5)
+        self.assertAlmostEqual(geo.bearing_deg(lat, lng, lat, lng - 0.01), 270, delta=0.5)
+
+    def test_angle_diff_wraps_around_north(self):
+        self.assertEqual(geo.angle_diff_deg(350, 10), 20)
+        self.assertEqual(geo.angle_diff_deg(10, 350), 20)
+        self.assertEqual(geo.angle_diff_deg(0, 180), 180)
+
+
+class HeadingFilterTests(TestCase):
+    lat, lng = 42.3600, -71.0600
+    # ~111m per 0.001 lat, ~82m per 0.001 lng in Boston
+    north_near = pt('north_near', 42.3610, -71.0600)
+    north_far = pt('north_far', 42.3620, -71.0600)
+    north_east = pt('north_east', 42.3610, -71.0590)   # bearing ~37°
+    east = pt('east', 42.3600, -71.0590)
+    south = pt('south', 42.3590, -71.0600)
+    west = pt('west', 42.3600, -71.0610)
+    right_here = pt('right_here', 42.36005, -71.06005)  # ~7m, south-west
+
+    def names(self, places):
+        return [p.name for p in places]
+
+    def all(self):
+        return [self.south, self.north_far, self.east, self.north_near,
+                self.west, self.north_east, self.right_here]
+
+    def test_keeps_places_in_front_sorted_by_distance(self):
+        result = geo.filter_by_heading(self.all(), self.lat, self.lng, heading=0)
+        self.assertEqual(self.names(result), ['right_here', 'north_near', 'north_east', 'north_far'])
+
+    def test_wraps_around_north(self):
+        result = geo.filter_by_heading([self.north_near, self.east, self.west],
+                                       self.lat, self.lng, heading=350)
+        self.assertEqual(self.names(result), ['north_near'])
+
+    def test_heading_outside_0_360_is_normalized(self):
+        result = geo.filter_by_heading([self.north_near, self.east], self.lat, self.lng, heading=450)
+        self.assertEqual(self.names(result), ['east'])
+
+    def test_no_heading_returns_all_by_distance(self):
+        result = geo.filter_by_heading(self.all(), self.lat, self.lng, heading=None)
+        self.assertEqual(len(result), 7)
+        self.assertEqual(result[0].name, 'right_here')
+
+    def test_nothing_in_front_falls_back_to_all(self):
+        places = [self.south, self.east]
+        result = geo.filter_by_heading(places, self.lat, self.lng, heading=300)
+        self.assertEqual(self.names(result), ['east', 'south'])
+
+    def test_capped_at_max(self):
+        places = [pt(f'p{i}', 42.3601 + i * 0.0001, -71.0600) for i in range(12)]
+        result = geo.filter_by_heading(places, self.lat, self.lng, heading=0)
+        self.assertEqual(len(result), geo.MAX_CANDIDATES)
+        self.assertEqual(result[0].name, 'p0')
+
+    def test_empty_input(self):
+        self.assertEqual(geo.filter_by_heading([], self.lat, self.lng, heading=0), [])
