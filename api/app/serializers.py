@@ -4,7 +4,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from . import permissions
-from .models import Friendship, Place, PlaceList, SavedPlace, Visibility
+from .models import Friendship, Place, SavedPlace, Tag, Visibility
 
 User = get_user_model()
 
@@ -81,7 +81,7 @@ class LoginSerializer(serializers.Serializer):
     password = serializers.CharField(trim_whitespace=False)
 
 
-# --- Saved places and lists (Phase 2) -------------------------------------
+# --- Saved places and tags (Phase 2) --------------------------------------
 
 class PlaceShortSerializer(serializers.ModelSerializer):
     class Meta:
@@ -115,6 +115,37 @@ def resolve_visibility(attrs, instance, user):
     return attrs
 
 
+class TagShortSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Tag
+        fields = ['id', 'name']
+
+
+class TagSerializer(serializers.ModelSerializer):
+    """Tag shape, and the body for POST /api/tags/ and PATCH /api/tags/<id>/."""
+
+    name = serializers.CharField(max_length=50, trim_whitespace=True)
+    count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Tag
+        fields = ['id', 'name', 'count']
+        read_only_fields = ['id']
+
+    def get_count(self, obj):
+        """How many of the owner's saved places have this tag (annotated by the view)."""
+        return getattr(obj, 'count', 0)
+
+    def validate_name(self, name):
+        name = ' '.join(name.split())
+        clash = permissions.own_tags(self.context['request'].user).filter(name__iexact=name)
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError('You already have a tag with that name.')
+        return name
+
+
 class SavedPlaceSerializer(serializers.ModelSerializer):
     """Saved place shape, and the body for POST /api/saved/ and PATCH /api/saved/<id>/."""
 
@@ -125,10 +156,14 @@ class SavedPlaceSerializer(serializers.ModelSerializer):
     )
     circle_id = serializers.IntegerField(required=False, allow_null=True)
     note = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    tags = TagShortSerializer(many=True, read_only=True)
+    # Replaces the whole set of tags. Each one must be the user's own.
+    tag_ids = serializers.ListField(child=serializers.IntegerField(), required=False, write_only=True)
 
     class Meta:
         model = SavedPlace
-        fields = ['id', 'place', 'place_id', 'visited', 'visited_at', 'note', 'visibility', 'circle_id', 'created_at']
+        fields = ['id', 'place', 'place_id', 'visited', 'visited_at', 'note', 'visibility', 'circle_id', 'tags',
+                  'tag_ids', 'created_at']
         read_only_fields = ['id', 'created_at']
 
     def validate_visited_at(self, value):
@@ -140,7 +175,17 @@ class SavedPlaceSerializer(serializers.ModelSerializer):
         if self.instance is not None and 'place' in attrs:
             raise serializers.ValidationError({'place_id': "A saved place's place can't be changed."})
         self._resolve_visited(attrs)
+        self._resolve_tags(attrs)
         return resolve_visibility(attrs, self.instance, self.context['request'].user)
+
+    def _resolve_tags(self, attrs):
+        if 'tag_ids' not in attrs:
+            return
+        ids = set(attrs.pop('tag_ids'))
+        tags = list(permissions.own_tags(self.context['request'].user).filter(pk__in=ids))
+        if len(tags) != len(ids):
+            raise serializers.ValidationError({'tag_ids': 'Tag not found.'})
+        attrs['tags'] = tags  # ModelSerializer sets many-to-many fields after saving
 
     def _resolve_visited(self, attrs):
         """Keep visited and visited_at consistent.
@@ -162,40 +207,6 @@ class SavedPlaceSerializer(serializers.ModelSerializer):
             attrs['visited_at'] = None
         elif visited_at is None:
             attrs['visited_at'] = timezone.localdate()
-
-
-class PlaceListSerializer(serializers.ModelSerializer):
-    """List shape, and the body for POST /api/lists/ and PATCH /api/lists/<id>/."""
-
-    circle_id = serializers.IntegerField(required=False, allow_null=True)
-    items = SavedPlaceSerializer(many=True, read_only=True)
-    visited_count = serializers.SerializerMethodField()
-    total_count = serializers.SerializerMethodField()
-
-    class Meta:
-        model = PlaceList
-        fields = ['id', 'name', 'description', 'visibility', 'circle_id', 'items', 'visited_count', 'total_count']
-        read_only_fields = ['id']
-        extra_kwargs = {'description': {'required': False, 'allow_blank': True, 'max_length': 2000}}
-
-    # Both counts use the prefetched items, so they don't add queries.
-    def get_visited_count(self, obj):
-        return sum(1 for item in obj.items.all() if item.visited)
-
-    def get_total_count(self, obj):
-        return len(obj.items.all())
-
-    def validate(self, attrs):
-        return resolve_visibility(attrs, self.instance, self.context['request'].user)
-
-
-class ListItemInputSerializer(serializers.Serializer):
-    """Body for POST /api/lists/<id>/items/."""
-
-    place_id = serializers.PrimaryKeyRelatedField(
-        queryset=Place.objects.all(),
-        error_messages={'does_not_exist': 'Place not found.', 'incorrect_type': 'place_id must be a number.'},
-    )
 
 
 # --- Friends (Phase 3) ----------------------------------------------------

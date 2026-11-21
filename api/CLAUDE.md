@@ -9,7 +9,7 @@ A hackathon app that makes exploring Boston easier and more fun. Users find out 
 
 Either way they get a **place card**: name, bio, rating, price range, hours, nearest T stop, and how many of their friends are interested in going.
 
-Users keep a list of saved places and check off the ones they've visited (with the date they went, which can be any date). They can group saved places into lists and choose who can see each one.
+Users keep a list of saved places and check off the ones they've visited (with the date they went, which can be any date). All their saved places live in one list ("My saved locations"). Each saved place has its own privacy setting, and users can label saved places with their own custom tags.
 
 Social features are built **after** the place APIs work: friends, circles (groups for making plans), activity posts that friends can reply "interested" or "going" to, and marking interest in a friend's saved places.
 
@@ -107,9 +107,9 @@ All in `app/models.py`. Use Django's built-in `User` model for accounts.
 - **PlaceCard:** one-to-one with Place, `bio` (text), `nearest_t` (JSON), `created_at`.
 - **IdentifyLog** (optional): photo, coordinates, heading, result JSON, `created_at`. For debugging and demos.
 
-### Saving and lists (Phase 2)
-- **SavedPlace:** FK `user`, FK `place`, `visited` (bool), `visited_at` (nullable date, set by the user to whenever they went), `note` (optional text), `visibility`, FK `circle` (nullable, required when visibility is `circle`), `created_at`. Unique on (user, place). This is the single source of truth for whether a user has visited a place.
-- **PlaceList:** FK `owner`, `name`, `description`, `visibility`, FK `circle` (nullable, required when visibility is `circle`), many-to-many to `SavedPlace` (`items`), `created_at`, `updated_at`. Adding a place to a list creates the `SavedPlace` first if it doesn't exist.
+### Saving and tags (Phase 2)
+- **SavedPlace:** FK `user`, FK `place`, `visited` (bool), `visited_at` (nullable date, set by the user to whenever they went), `note` (optional text), `visibility`, FK `circle` (nullable, required when visibility is `circle`), many-to-many to `Tag` (`tags`), `created_at`. Unique on (user, place). This is the single source of truth for whether a user has visited a place. A user's saved places are their one and only list ("My saved locations"); there are no other lists.
+- **Tag:** FK `owner`, `name`, `created_at`. Names are unique per user ignoring case. A saved place can only carry its owner's tags. Tags are labels only and never change who can see a saved place.
 
 ### Social (Phase 3)
 - **Friendship:** FK `from_user`, FK `to_user`, `status` (pending / accepted / declined), `created_at`. Unique on (from_user, to_user). Two users are friends when an accepted row exists in either direction.
@@ -119,7 +119,7 @@ All in `app/models.py`. Use Django's built-in `User` model for accounts.
 - **ActivityResponse:** FK `activity`, FK `user`, `status` (interested / going), `created_at`, `updated_at`. Unique on (activity, user).
 
 ### Visibility
-One shared choice set used by SavedPlace, PlaceList and Activity:
+One shared choice set used by SavedPlace and Activity:
 
 | Value | Who can see it |
 |---|---|
@@ -180,7 +180,7 @@ Don't change these shapes without telling the frontend team. All URLs are under 
 - `saved` is `null` if the user hasn't saved the place or isn't logged in.
 - `friends_interested` is always present and is 0 when not logged in.
 
-### Phase 2: accounts, saved places, lists (auth required)
+### Phase 2: accounts, saved places, tags (auth required)
 
 Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 
@@ -190,11 +190,9 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 | POST | `/api/auth/login/` | Returns token |
 | GET | `/api/me/` | Current user |
 | GET / POST | `/api/saved/` | List my saved places / save a place |
-| PATCH / DELETE | `/api/saved/<id>/` | Update visited, visited_at, note, visibility / unsave |
-| GET / POST | `/api/lists/` | My lists / create a list |
-| GET / PATCH / DELETE | `/api/lists/<id>/` | View, edit, delete a list |
-| POST | `/api/lists/<id>/items/` | Add a place (body: `place_id`) |
-| DELETE | `/api/lists/<id>/items/<saved_id>/` | Remove a place from a list |
+| PATCH / DELETE | `/api/saved/<id>/` | Update visited, visited_at, note, visibility, tags / unsave |
+| GET / POST | `/api/tags/` | My tags / create a tag (body: `name`) |
+| PATCH / DELETE | `/api/tags/<id>/` | Rename / delete a tag |
 
 **Register / login:**
 - `POST /api/auth/register/` body: `username`, `password`, `email` (optional). 201 on success.
@@ -206,14 +204,19 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 ```
 - `GET /api/me/` returns the `user` object.
 
-**Saving and list rules:**
-- `GET /api/saved/` and `GET /api/lists/` return `{"results": [...]}`. `GET /api/saved/?visited=true|false` filters.
-- `POST /api/saved/` body: `place_id` plus any of `visited`, `visited_at`, `note`, `visibility`, `circle_id`. Returns 201, or 200 with the existing saved place (unchanged) if it was already saved. Use PATCH to edit it.
+**Saving rules:**
+- `GET /api/saved/` is "My saved locations" and returns `{"results": [...]}`, newest first. Filters: `?visited=true|false` and `?tag=<tag id>`.
+- `POST /api/saved/` body: `place_id` plus any of `visited`, `visited_at`, `note`, `visibility`, `circle_id`, `tag_ids`. Returns 201, or 200 with the existing saved place (unchanged) if it was already saved. Use PATCH to edit it.
 - Sending `visited_at` marks the place visited. `visited: true` with no date uses today. `visited: false` clears the date. Future dates are rejected.
 - `visibility: "circle"` needs a `circle_id` for a circle the user belongs to. Any other visibility clears `circle_id`.
-- Unsaving a place removes it from the user's lists. Deleting a list, or removing an item from it, keeps the places saved.
-- `POST /api/lists/<id>/items/` returns the list shape: 201 if the place was added, 200 if it was already in the list. Item DELETE and list/saved DELETE return 204.
-- Phase 2 endpoints only reach the requester's own saved places and lists; anyone else's return 404.
+- `tag_ids` (a JSON list) replaces the saved place's whole set of tags; `[]` clears them and leaving it out keeps them. Every id must be one of the user's own tags, otherwise 400.
+- Saved DELETE and tag DELETE return 204. Deleting a tag keeps the places saved; unsaving a place keeps the tags.
+- Phase 2 endpoints only reach the requester's own saved places and tags; anyone else's return 404.
+
+**Tag rules:**
+- `GET /api/tags/` returns `{"results": [<tag shape>]}`, A to Z. Tags are private to their owner, except that they show on a saved place to anyone who can see that saved place.
+- `POST /api/tags/` returns 201, or 200 with the existing tag if the user already has one with that name (ignoring case). Names are trimmed with spaces collapsed, 1 to 50 characters.
+- `PATCH /api/tags/<id>/` renames it; 400 if another of the user's tags already has that name.
 - `Circle` and `CircleMembership` models exist already (for the `circle` FK) but have no endpoints until Phase 3. Make them in the admin for now.
 
 **Saved place shape:**
@@ -226,23 +229,16 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
   "note": "",
   "visibility": "private | friends | circle | public",
   "circle_id": null,
+  "tags": [ { "id": 0, "name": "" } ],
   "created_at": ""
 }
 ```
 
-**List shape:**
+**Tag shape:**
 ```json
-{
-  "id": 0,
-  "name": "",
-  "description": "",
-  "visibility": "private | friends | circle | public",
-  "circle_id": null,
-  "items": [ "<saved place shape>" ],
-  "visited_count": 0,
-  "total_count": 0
-}
+{ "id": 0, "name": "", "count": 0 }
 ```
+`count` is how many of the user's saved places have the tag.
 
 ### Phase 3: social (auth required)
 
@@ -255,7 +251,6 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 | POST | `/api/friends/requests/<id>/decline/` | Decline |
 | DELETE | `/api/friends/<user_id>/` | Unfriend |
 | GET | `/api/users/<id>/saved/` | Their saved places that I'm allowed to see |
-| GET | `/api/users/<id>/lists/` | Their lists that I'm allowed to see |
 | POST / DELETE | `/api/places/<id>/interest/` | Mark / unmark interested. Optional body: `via_saved_place_id` |
 | GET / POST | `/api/circles/` | My circles / create one |
 | GET / PATCH / DELETE | `/api/circles/<id>/` | View, edit, delete (owner only for edit/delete) |
@@ -273,6 +268,12 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 - Accept / decline only work on pending requests sent to me (anything else is 404) and return the request shape. Accepting removes any other request between the two users.
 - `DELETE /api/friends/<user_id>/` returns 204, or 404 if we aren't friends. It clears every request between the two users so either can send a new one.
 - Friend checks (`friends_of`, `are_friends`, `friend_ids`) live in `app/permissions.py`.
+
+**Other users' saved places:**
+- `GET /api/users/<id>/saved/` returns `{"results": [<saved place shape>]}`, the same shape as `/api/saved/`, with the same `?visited=` and `?tag=` filters. It shows only the saved places whose own visibility lets me see them, tags included.
+- 404 for an unknown user, and an empty list (not 403) when nothing is visible.
+- Visibility is checked live: unfriending or leaving a circle hides things straight away. A `circle` item whose circle was deleted is owner-only.
+- Use `visible_saved_places(viewer)` from `app/permissions.py` for every read of someone else's saved places. Edits stay owner-only (`own_saved_places`, `own_tags`).
 
 **Friend request shape:**
 ```json
@@ -365,11 +366,11 @@ Social rules:
 ### Phase 2: accounts and saving
 14. User accounts with DRF token auth (register, login, me)
 15. Saved places with visited / visited_at, and `saved` on the place card
-16. Lists with visibility settings
+16. Custom tags on saved places (replaced lists; each saved place keeps its own visibility)
 
 ### Phase 3: social
 17. Friendships (requests, accept, decline, unfriend)
-18. Visibility helpers in `permissions.py` + viewing friends' saved places and lists (with tests)
+18. Visibility helpers in `permissions.py` + viewing friends' saved places (with tests)
 19. Place interest + live `friends_interested` count on the card
 20. Circles and membership
 21. Activities, responses and the activity feed

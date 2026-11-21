@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models.functions import Lower
 
 
 class Place(models.Model):
@@ -73,10 +74,10 @@ class PlaceCard(models.Model):
         return f'Card: {self.place.name}'
 
 
-# --- Accounts, saving and lists (Phase 2) ---------------------------------
+# --- Accounts, saving and tags (Phase 2) ----------------------------------
 
 class Visibility(models.TextChoices):
-    """Who can see a SavedPlace, PlaceList or Activity. Checks live in app/permissions.py."""
+    """Who can see a SavedPlace or Activity. Checks live in app/permissions.py."""
 
     PRIVATE = 'private', 'Only me'
     FRIENDS = 'friends', 'Friends'
@@ -87,7 +88,7 @@ class Visibility(models.TextChoices):
 class Circle(models.Model):
     """A group of friends for making plans.
 
-    Created here because saved places and lists can be shared with a circle.
+    Created here because saved places can be shared with a circle.
     The circle endpoints come in Phase 3; until then circles are made in the admin.
     """
 
@@ -121,8 +122,28 @@ class CircleMembership(models.Model):
         return f'{self.user} in {self.circle}'
 
 
+class Tag(models.Model):
+    """A user's own label for their saved places, like "date ideas" or "coffee". Names are unique per user,
+    ignoring case."""
+
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='tags')
+    name = models.CharField(max_length=50)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name', 'id']
+        constraints = [models.UniqueConstraint(Lower('name'), 'owner', name='unique_tag_name_per_user')]
+
+    def __str__(self):
+        return self.name
+
+
 class SavedPlace(models.Model):
-    """A place a user saved. The single source of truth for whether they've visited it."""
+    """A place a user saved. All of a user's saved places are their one list ("My saved locations").
+
+    Each saved place has its own visibility. It's also the single source of truth for whether
+    the user has visited the place.
+    """
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='saved_places')
     place = models.ForeignKey(Place, on_delete=models.CASCADE, related_name='saves')
@@ -133,6 +154,7 @@ class SavedPlace(models.Model):
     # Required when visibility is "circle". If the circle is deleted this becomes
     # null and only the owner can see it.
     circle = models.ForeignKey(Circle, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    tags = models.ManyToManyField(Tag, related_name='saved_places', blank=True)  # only the owner's own tags
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -141,25 +163,6 @@ class SavedPlace(models.Model):
 
     def __str__(self):
         return f'{self.user} saved {self.place}'
-
-
-class PlaceList(models.Model):
-    """A named group of the owner's saved places."""
-
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='place_lists')
-    name = models.CharField(max_length=100)
-    description = models.TextField(blank=True)
-    visibility = models.CharField(max_length=10, choices=Visibility.choices, default=Visibility.PRIVATE)
-    circle = models.ForeignKey(Circle, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
-    items = models.ManyToManyField(SavedPlace, related_name='lists', blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        ordering = ['-updated_at', '-id']
-
-    def __str__(self):
-        return self.name
 
 
 # --- Social (Phase 3) -----------------------------------------------------

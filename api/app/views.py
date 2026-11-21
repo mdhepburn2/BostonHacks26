@@ -2,6 +2,7 @@ import logging
 
 from django.contrib.auth import authenticate, get_user_model
 from django.db import IntegrityError, transaction
+from django.db.models import Count
 from django.http import JsonResponse
 from django.utils import timezone
 from rest_framework import status
@@ -13,10 +14,10 @@ from rest_framework.response import Response
 from rest_framework.views import exception_handler as drf_exception_handler
 
 from . import permissions
-from .models import Friendship, Place, SavedPlace
+from .models import Friendship, Place
 from .serializers import (FriendRequestInputSerializer, FriendRequestSerializer, IdentifyInputSerializer,
-                          ListItemInputSerializer, LoginSerializer, PlaceListSerializer, RegisterSerializer,
-                          SavedPlaceSerializer, SearchInputSerializer, UserSerializer, UserShortSerializer)
+                          LoginSerializer, RegisterSerializer, SavedPlaceSerializer, SearchInputSerializer,
+                          TagSerializer, UserSerializer, UserShortSerializer)
 from .services.http import ExternalAPIError
 from .services.identify import identify as identify_photo
 from .services.place_card import get_card
@@ -136,14 +137,23 @@ def me(request):
 
 # --- Saved places (Phase 2) -----------------------------------------------
 
+def _saved_list(saved, params):
+    """Shared by my saved places and someone else's: ?visited=true|false and ?tag=<id> filters."""
+    visited = params.get('visited')
+    if visited in ('true', 'false'):
+        saved = saved.filter(visited=visited == 'true')
+    tag = params.get('tag')
+    if tag is not None and tag.isdigit():
+        saved = saved.filter(tags=tag)
+    saved = saved.select_related('place').prefetch_related('tags')
+    return Response({'results': SavedPlaceSerializer(saved, many=True).data})
+
+
 @api_view(['GET', 'POST'])
 def saved_places(request):
+    """My saved locations: the user's one list of everything they've saved."""
     if request.method == 'GET':
-        saved = permissions.own_saved_places(request.user).select_related('place')
-        visited = request.query_params.get('visited')
-        if visited in ('true', 'false'):
-            saved = saved.filter(visited=visited == 'true')
-        return Response({'results': SavedPlaceSerializer(saved, many=True).data})
+        return _saved_list(permissions.own_saved_places(request.user), request.query_params)
 
     data = SavedPlaceSerializer(data=request.data, context={'request': request})
     data.is_valid(raise_exception=True)
@@ -161,11 +171,12 @@ def saved_places(request):
 
 @api_view(['PATCH', 'DELETE'])
 def saved_place_detail(request, saved_id):
-    saved = permissions.own_saved_places(request.user).select_related('place').filter(pk=saved_id).first()
+    saved = permissions.own_saved_places(request.user).select_related('place').prefetch_related('tags') \
+        .filter(pk=saved_id).first()
     if saved is None:
         return Response({'detail': 'Saved place not found.'}, status=status.HTTP_404_NOT_FOUND)
     if request.method == 'DELETE':
-        saved.delete()  # also removes it from the user's lists
+        saved.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     data = SavedPlaceSerializer(saved, data=request.data, partial=True, context={'request': request})
@@ -173,80 +184,45 @@ def saved_place_detail(request, saved_id):
     return Response(SavedPlaceSerializer(data.save()).data)
 
 
-# --- Lists (Phase 2) ------------------------------------------------------
+# --- Tags (Phase 2) -------------------------------------------------------
 
-def _own_list(request, list_id):
-    return permissions.own_lists(request.user).prefetch_related('items__place').filter(pk=list_id).first()
-
-
-def _list_not_found():
-    return Response({'detail': 'List not found.'}, status=status.HTTP_404_NOT_FOUND)
+def _own_tags(user):
+    return permissions.own_tags(user).annotate(count=Count('saved_places'))
 
 
 @api_view(['GET', 'POST'])
-def place_lists(request):
+def tags(request):
     if request.method == 'GET':
-        lists = permissions.own_lists(request.user).prefetch_related('items__place')
-        return Response({'results': PlaceListSerializer(lists, many=True).data})
+        return Response({'results': TagSerializer(_own_tags(request.user), many=True).data})
 
-    data = PlaceListSerializer(data=request.data, context={'request': request})
+    # Creating a tag that already exists (ignoring case) returns the existing one.
+    name = request.data.get('name')
+    if isinstance(name, str):
+        existing = _own_tags(request.user).filter(name__iexact=' '.join(name.split())).first()
+        if existing is not None:
+            return Response(TagSerializer(existing).data)
+    data = TagSerializer(data=request.data, context={'request': request})
     data.is_valid(raise_exception=True)
-    return Response(PlaceListSerializer(data.save(owner=request.user)).data, status=status.HTTP_201_CREATED)
-
-
-@api_view(['GET', 'PATCH', 'DELETE'])
-def place_list_detail(request, list_id):
-    place_list = _own_list(request, list_id)
-    if place_list is None:
-        return _list_not_found()
-    if request.method == 'GET':
-        return Response(PlaceListSerializer(place_list).data)
-    if request.method == 'DELETE':
-        place_list.delete()  # the saved places themselves stay saved
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
-    data = PlaceListSerializer(place_list, data=request.data, partial=True, context={'request': request})
-    data.is_valid(raise_exception=True)
-    data.save()
-    return Response(PlaceListSerializer(_own_list(request, list_id)).data)
-
-
-@api_view(['POST'])
-def place_list_items(request, list_id):
-    """Add a place to a list, saving it first if the user hasn't yet."""
-    place_list = _own_list(request, list_id)
-    if place_list is None:
-        return _list_not_found()
-    data = ListItemInputSerializer(data=request.data)
-    data.is_valid(raise_exception=True)
-    place = data.validated_data['place_id']
-
     try:
         with transaction.atomic():
-            saved, _ = SavedPlace.objects.get_or_create(user=request.user, place=place)
-    except IntegrityError:  # created by a concurrent request
-        saved = permissions.own_saved_places(request.user).get(place=place)
-
-    already_in = place_list.items.filter(pk=saved.pk).exists()
-    if not already_in:
-        place_list.items.add(saved)
-        place_list.save(update_fields=['updated_at'])
-    return Response(PlaceListSerializer(_own_list(request, list_id)).data,
-                    status=status.HTTP_200_OK if already_in else status.HTTP_201_CREATED)
+            tag = data.save(owner=request.user)
+    except IntegrityError:  # a double tap created it in between
+        return Response(TagSerializer(_own_tags(request.user).get(name__iexact=data.validated_data['name'])).data)
+    return Response(TagSerializer(_own_tags(request.user).get(pk=tag.pk)).data, status=status.HTTP_201_CREATED)
 
 
-@api_view(['DELETE'])
-def place_list_item_detail(request, list_id, saved_id):
-    """Remove a place from a list. It stays in the user's saved places."""
-    place_list = _own_list(request, list_id)
-    if place_list is None:
-        return _list_not_found()
-    saved = place_list.items.filter(pk=saved_id).first()
-    if saved is None:
-        return Response({'detail': "That place isn't in this list."}, status=status.HTTP_404_NOT_FOUND)
-    place_list.items.remove(saved)
-    place_list.save(update_fields=['updated_at'])
-    return Response(status=status.HTTP_204_NO_CONTENT)
+@api_view(['PATCH', 'DELETE'])
+def tag_detail(request, tag_id):
+    tag = _own_tags(request.user).filter(pk=tag_id).first()
+    if tag is None:
+        return Response({'detail': 'Tag not found.'}, status=status.HTTP_404_NOT_FOUND)
+    if request.method == 'DELETE':
+        tag.delete()  # the places it was on stay saved
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    data = TagSerializer(tag, data=request.data, partial=True, context={'request': request})
+    data.is_valid(raise_exception=True)
+    data.save()
+    return Response(TagSerializer(_own_tags(request.user).get(pk=tag_id)).data)
 
 
 # --- Friends (Phase 3) ----------------------------------------------------
@@ -346,3 +322,14 @@ def unfriend(request, user_id):
     # Clear every row between the pair so either of them can send a fresh request later.
     permissions.friendships_between(request.user, user_id).delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# --- Other users' saved places (Phase 3) ----------------------------------
+
+@api_view(['GET'])
+def user_saved_places(request, user_id):
+    """Their saved places that I'm allowed to see."""
+    owner = get_user_model().objects.filter(pk=user_id).first()
+    if owner is None:
+        return Response({'detail': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
+    return _saved_list(permissions.visible_saved_places(request.user).filter(user=owner), request.query_params)

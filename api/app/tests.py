@@ -946,7 +946,7 @@ from django.contrib.auth.models import User
 from django.utils import timezone
 from rest_framework.authtoken.models import Token
 
-from .models import Circle, CircleMembership, PlaceList, SavedPlace
+from .models import Circle, CircleMembership, SavedPlace, Tag
 
 GOOD_PASSWORD = 'walk-the-freedom-trail'
 
@@ -999,8 +999,7 @@ class AuthTests(APITestCase):
 
 # --- Saved places (step 15) -----------------------------------------------
 
-SAVED_KEYS = {'id', 'place', 'visited', 'visited_at', 'note', 'visibility', 'circle_id', 'created_at'}
-LIST_KEYS = {'id', 'name', 'description', 'visibility', 'circle_id', 'items', 'visited_count', 'total_count'}
+SAVED_KEYS = {'id', 'place', 'visited', 'visited_at', 'note', 'visibility', 'circle_id', 'tags', 'created_at'}
 
 
 class LoggedInTestCase(APITestCase):
@@ -1088,12 +1087,11 @@ class SavedPlaceTests(LoggedInTestCase):
         self.assertEqual(self.client.delete(f'/api/saved/{theirs.id}/').status_code, 404)
         self.assertTrue(SavedPlace.objects.filter(pk=theirs.id).exists())
 
-    def test_unsave_removes_from_lists(self):
+    def test_unsave_keeps_tags(self):
         saved = SavedPlace.objects.create(user=self.user, place=self.place)
-        place_list = PlaceList.objects.create(owner=self.user, name='Todo')
-        place_list.items.add(saved)
+        saved.tags.add(Tag.objects.create(owner=self.user, name='Todo'))
         self.assertEqual(self.client.delete(f'/api/saved/{saved.id}/').status_code, 204)
-        self.assertEqual(place_list.items.count(), 0)
+        self.assertTrue(Tag.objects.filter(name='Todo').exists())
 
     def test_circle_visibility(self):
         saved = SavedPlace.objects.create(user=self.user, place=self.place)
@@ -1136,91 +1134,115 @@ class PlaceCardSavedTests(LoggedInTestCase):
         self.assertIsNone(self.client.get(f'/api/places/{self.place.id}/').json()['saved'])
 
 
-# --- Lists (step 16) ------------------------------------------------------
+# --- Tags (replaced lists in step 16) ------------------------------------
 
-class PlaceListTests(LoggedInTestCase):
-    def create_list(self, **extra):
-        response = self.client.post('/api/lists/', {'name': 'Date ideas', **extra})
+class TagTests(LoggedInTestCase):
+    def create_tag(self, name='Date ideas'):
+        response = self.client.post('/api/tags/', {'name': name})
         self.assertEqual(response.status_code, 201, response.content)
         return response.json()
 
-    def test_create_returns_contract_shape(self):
-        body = self.create_list(description='cute spots', visibility='friends')
-        self.assertEqual(set(body), LIST_KEYS)
-        self.assertEqual(body['items'], [])
-        self.assertEqual((body['visited_count'], body['total_count']), (0, 0))
-        self.assertEqual(body['visibility'], 'friends')
+    def tag_place(self, place, *tag_ids, method='post'):
+        if method == 'post':
+            return self.client.post('/api/saved/', {'place_id': place.id, 'tag_ids': list(tag_ids)}, format='json')
+        saved = SavedPlace.objects.get(user=self.user, place=place)
+        return self.client.patch(f'/api/saved/{saved.id}/', {'tag_ids': list(tag_ids)}, format='json')
 
-    def test_name_required(self):
-        self.assertEqual(self.client.post('/api/lists/', {}).status_code, 400)
+    def test_create_returns_shape(self):
+        body = self.create_tag()
+        self.assertEqual(set(body), {'id', 'name', 'count'})
+        self.assertEqual(body['name'], 'Date ideas')
+        self.assertEqual(body['count'], 0)
 
-    def test_add_item_saves_the_place_first(self):
-        lst = self.create_list()
-        response = self.client.post(f'/api/lists/{lst["id"]}/items/', {'place_id': self.place.id})
-        self.assertEqual(response.status_code, 201)
-        body = response.json()
-        self.assertEqual(body['total_count'], 1)
-        self.assertEqual(set(body['items'][0]), SAVED_KEYS)
-        self.assertTrue(SavedPlace.objects.filter(user=self.user, place=self.place).exists())
+    def test_name_is_tidied_and_required(self):
+        self.assertEqual(self.create_tag('  coffee   spots ')['name'], 'coffee spots')
+        self.assertEqual(self.client.post('/api/tags/', {}).status_code, 400)
+        self.assertEqual(self.client.post('/api/tags/', {'name': '   '}).status_code, 400)
+        self.assertEqual(self.client.post('/api/tags/', {'name': 'x' * 51}).status_code, 400)
 
-        again = self.client.post(f'/api/lists/{lst["id"]}/items/', {'place_id': self.place.id})
+    def test_creating_existing_name_returns_it(self):
+        first = self.create_tag('Coffee')
+        again = self.client.post('/api/tags/', {'name': 'coffee'})
         self.assertEqual(again.status_code, 200)
-        self.assertEqual(again.json()['total_count'], 1)
+        self.assertEqual(again.json()['id'], first['id'])
+        self.assertEqual(Tag.objects.count(), 1)
 
-    def test_add_item_reuses_existing_saved_place_and_counts_visited(self):
-        saved = SavedPlace.objects.create(user=self.user, place=self.place, visited=True,
-                                          visited_at=datetime.date(2026, 1, 1))
-        lst = self.create_list()
-        self.client.post(f'/api/lists/{lst["id"]}/items/', {'place_id': self.place.id})
-        body = self.client.post(f'/api/lists/{lst["id"]}/items/', {'place_id': self.place2.id}).json()
-        self.assertEqual(SavedPlace.objects.filter(user=self.user).count(), 2)
-        self.assertIn(saved.id, [i['id'] for i in body['items']])
-        self.assertEqual((body['visited_count'], body['total_count']), (1, 2))
+    def test_same_name_for_different_users_is_fine(self):
+        Tag.objects.create(owner=self.other, name='Coffee')
+        self.create_tag('Coffee')
 
-    def test_remove_item_keeps_it_saved(self):
-        lst = self.create_list()
-        body = self.client.post(f'/api/lists/{lst["id"]}/items/', {'place_id': self.place.id}).json()
-        saved_id = body['items'][0]['id']
-        self.assertEqual(self.client.delete(f'/api/lists/{lst["id"]}/items/{saved_id}/').status_code, 204)
-        self.assertEqual(self.client.get(f'/api/lists/{lst["id"]}/').json()['total_count'], 0)
+    def test_save_with_tags_and_count(self):
+        tag = self.create_tag()
+        response = self.tag_place(self.place, tag['id'])
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()['tags'], [{'id': tag['id'], 'name': 'Date ideas'}])
+        self.assertEqual(self.client.get('/api/tags/').json()['results'][0]['count'], 1)
+
+    def test_patch_replaces_tags(self):
+        a, b = self.create_tag('A'), self.create_tag('B')
+        self.tag_place(self.place, a['id'])
+        body = self.tag_place(self.place, b['id'], method='patch').json()
+        self.assertEqual([t['name'] for t in body['tags']], ['B'])
+        body = self.tag_place(self.place, method='patch').json()
+        self.assertEqual(body['tags'], [])
+
+    def test_patch_without_tag_ids_keeps_tags(self):
+        tag = self.create_tag()
+        saved_id = self.tag_place(self.place, tag['id']).json()['id']
+        body = self.client.patch(f'/api/saved/{saved_id}/', {'note': 'hi'}).json()
+        self.assertEqual(len(body['tags']), 1)
+
+    def test_cant_use_someone_elses_tag(self):
+        theirs = Tag.objects.create(owner=self.other, name='Theirs')
+        response = self.tag_place(self.place, theirs.id)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('tag_ids', response.json())
+        self.assertFalse(SavedPlace.objects.exists())
+        self.assertEqual(self.tag_place(self.place, 9999).status_code, 400)
+
+    def test_filter_saved_by_tag(self):
+        tag = self.create_tag()
+        tagged = self.tag_place(self.place, tag['id']).json()
+        self.client.post('/api/saved/', {'place_id': self.place2.id})
+        ids = [r['id'] for r in self.client.get(f'/api/saved/?tag={tag["id"]}').json()['results']]
+        self.assertEqual(ids, [tagged['id']])
+        self.assertEqual(len(self.client.get('/api/saved/?tag=nonsense').json()['results']), 2)
+
+    def test_rename(self):
+        tag = self.create_tag()
+        body = self.client.patch(f'/api/tags/{tag["id"]}/', {'name': 'Dates'}).json()
+        self.assertEqual(body['name'], 'Dates')
+        # renaming to its own name in different case is fine; clashing with another tag isn't
+        self.assertEqual(self.client.patch(f'/api/tags/{tag["id"]}/', {'name': 'DATES'}).status_code, 200)
+        other = self.create_tag('Coffee')
+        self.assertEqual(self.client.patch(f'/api/tags/{other["id"]}/', {'name': 'dates'}).status_code, 400)
+
+    def test_delete_keeps_places_saved(self):
+        tag = self.create_tag()
+        saved_id = self.tag_place(self.place, tag['id']).json()['id']
+        self.assertEqual(self.client.delete(f'/api/tags/{tag["id"]}/').status_code, 204)
         self.assertTrue(SavedPlace.objects.filter(pk=saved_id).exists())
-        self.assertEqual(self.client.delete(f'/api/lists/{lst["id"]}/items/{saved_id}/').status_code, 404)
+        self.assertEqual(self.client.get('/api/saved/').json()['results'][0]['tags'], [])
 
-    def test_edit_and_delete(self):
-        lst = self.create_list()
-        body = self.client.patch(f'/api/lists/{lst["id"]}/', {'name': 'Renamed', 'visibility': 'public'}).json()
-        self.assertEqual((body['name'], body['visibility']), ('Renamed', 'public'))
-        self.assertEqual(self.client.delete(f'/api/lists/{lst["id"]}/').status_code, 204)
-        self.assertFalse(PlaceList.objects.exists())
+    def test_only_my_tags(self):
+        theirs = Tag.objects.create(owner=self.other, name='Theirs')
+        self.create_tag('Mine')
+        self.assertEqual([t['name'] for t in self.client.get('/api/tags/').json()['results']], ['Mine'])
+        self.assertEqual(self.client.patch(f'/api/tags/{theirs.id}/', {'name': 'x'}).status_code, 404)
+        self.assertEqual(self.client.delete(f'/api/tags/{theirs.id}/').status_code, 404)
 
-    def test_index_only_shows_mine(self):
-        self.create_list()
-        PlaceList.objects.create(owner=self.other, name='Theirs', visibility='public')
-        names = [l['name'] for l in self.client.get('/api/lists/').json()['results']]
-        self.assertEqual(names, ['Date ideas'])
+    def test_lists_are_gone(self):
+        self.assertEqual(self.client.get('/api/lists/').status_code, 404)
+        self.assertEqual(self.client.get(f'/api/users/{self.other.id}/lists/').status_code, 404)
 
-    def test_other_users_list_is_404(self):
-        theirs = PlaceList.objects.create(owner=self.other, name='Theirs', visibility='public')
-        base = f'/api/lists/{theirs.id}/'
-        self.assertEqual(self.client.get(base).status_code, 404)
-        self.assertEqual(self.client.patch(base, {'name': 'x'}).status_code, 404)
-        self.assertEqual(self.client.delete(base).status_code, 404)
-        self.assertEqual(self.client.post(base + 'items/', {'place_id': self.place.id}).status_code, 404)
-        self.assertFalse(SavedPlace.objects.filter(user=self.user).exists())
-
-    def test_circle_visibility_needs_my_circle(self):
-        self.assertEqual(self.client.post('/api/lists/', {'name': 'x', 'visibility': 'circle'}).status_code, 400)
-        circle = self.make_circle(self.user)
-        body = self.create_list(visibility='circle', circle_id=circle.id)
-        self.assertEqual(body['circle_id'], circle.id)
-
-    def test_index_query_count_is_flat(self):
-        for i in range(3):
-            lst = PlaceList.objects.create(owner=self.user, name=f'L{i}')
-            lst.items.add(SavedPlace.objects.get_or_create(user=self.user, place=self.place)[0],
-                          SavedPlace.objects.get_or_create(user=self.user, place=self.place2)[0])
-        with self.assertNumQueries(3):  # lists, items, places
-            self.client.get('/api/lists/')
+    def test_query_counts_are_flat(self):
+        tags = [Tag.objects.create(owner=self.user, name=f'T{i}') for i in range(3)]
+        for place in (self.place, self.place2):
+            SavedPlace.objects.create(user=self.user, place=place).tags.add(*tags)
+        with self.assertNumQueries(1):
+            self.client.get('/api/tags/')
+        with self.assertNumQueries(2):  # saved places + places, tags
+            self.client.get('/api/saved/')
 
 
 # --- Friendships (step 17) ------------------------------------------------
@@ -1373,3 +1395,134 @@ class FriendshipTests(LoggedInTestCase):
             self.client.get('/api/friends/')
         with self.assertNumQueries(1):
             self.client.get('/api/friends/requests/')
+
+
+# --- Visibility + friends' saved places (step 18) ------------------------
+
+class VisibilityTests(LoggedInTestCase):
+    """self.other ("sam") owns things; we check who else can see them."""
+
+    def setUp(self):
+        super().setUp()
+        self.owner = self.other
+        self.friend = self.user  # "matt" is logged in and is sam's friend
+        Friendship.objects.create(from_user=self.owner, to_user=self.friend, status=Friendship.STATUS_ACCEPTED)
+        self.member = User.objects.create_user('member')
+        self.stranger = User.objects.create_user('stranger')
+        self.pending = User.objects.create_user('pending')
+        Friendship.objects.create(from_user=self.owner, to_user=self.pending)  # not accepted
+        self.circle = self.make_circle(self.owner, self.member)
+
+    def saved(self, visibility, place=None, circle=None):
+        return SavedPlace.objects.create(user=self.owner, place=place or self.place, visibility=visibility,
+                                         circle=circle)
+
+    def assert_visible(self, obj, expected):
+        for viewer, can_see in expected.items():
+            with self.subTest(obj=obj.visibility, viewer=viewer.username):
+                self.assertEqual(perms.visible_saved_places(viewer).filter(pk=obj.pk).exists(), can_see)
+
+    def matrix(self, visibility):
+        everyone = {self.owner: True, self.friend: False, self.member: False, self.stranger: False,
+                    self.pending: False}
+        if visibility == 'public':
+            return dict.fromkeys(everyone, True)
+        if visibility == 'friends':
+            everyone[self.friend] = True
+        if visibility == 'circle':
+            everyone[self.member] = True
+        return everyone
+
+    def test_saved_place_matrix(self):
+        for vis in ('private', 'friends', 'circle', 'public'):
+            obj = self.saved(vis, place=Place.objects.create(external_id=f's-{vis}', source='google', name=vis,
+                                                             lat=0, lng=0),
+                             circle=self.circle if vis == 'circle' else None)
+            self.assert_visible(obj, self.matrix(vis))
+
+    def test_logged_out_sees_nothing(self):
+        from django.contrib.auth.models import AnonymousUser
+        self.saved('public')
+        self.assertFalse(perms.visible_saved_places(AnonymousUser()).exists())
+
+    def test_circle_with_deleted_circle_is_owner_only(self):
+        obj = self.saved('circle', circle=self.circle)
+        self.circle.delete()
+        obj.refresh_from_db()
+        self.assertIsNone(obj.circle)
+        self.assert_visible(obj, {self.owner: True, self.member: False})
+
+    def test_unfriending_hides_friends_items(self):
+        obj = self.saved('friends')
+        self.assert_visible(obj, {self.friend: True})
+        perms.friendships_between(self.owner, self.friend).delete()
+        self.assert_visible(obj, {self.friend: False})
+
+    def test_leaving_circle_hides_circle_items(self):
+        obj = self.saved('circle', circle=self.circle)
+        CircleMembership.objects.filter(circle=self.circle, user=self.member).delete()
+        self.assert_visible(obj, {self.member: False})
+
+    def test_tags_dont_change_visibility(self):
+        obj = self.saved('private')
+        obj.tags.add(Tag.objects.create(owner=self.owner, name='Date ideas'))
+        self.assert_visible(obj, self.matrix('private'))
+
+    # --- endpoint ---
+
+    def test_user_saved_endpoint(self):
+        visible = self.saved('friends')
+        visible.tags.add(Tag.objects.create(owner=self.owner, name='Coffee'))
+        self.saved('private', place=self.place2)
+        response = self.client.get(f'/api/users/{self.owner.id}/saved/')
+        self.assertEqual(response.status_code, 200)
+        results = response.json()['results']
+        self.assertEqual([r['id'] for r in results], [visible.id])
+        self.assertEqual(set(results[0]), SAVED_KEYS)
+        self.assertEqual([t['name'] for t in results[0]['tags']], ['Coffee'])
+
+    def test_user_saved_only_shows_that_user(self):
+        SavedPlace.objects.create(user=self.stranger, place=self.place, visibility='public')
+        self.assertEqual(self.client.get(f'/api/users/{self.owner.id}/saved/').json()['results'], [])
+
+    def test_user_saved_filters(self):
+        went = SavedPlace.objects.create(user=self.owner, place=self.place, visibility='public', visited=True,
+                                         visited_at=datetime.date(2026, 1, 1))
+        other = SavedPlace.objects.create(user=self.owner, place=self.place2, visibility='public')
+        tag = Tag.objects.create(owner=self.owner, name='Later')
+        other.tags.add(tag)
+        base = f'/api/users/{self.owner.id}/saved/'
+        self.assertEqual([r['id'] for r in self.client.get(base + '?visited=true').json()['results']], [went.id])
+        self.assertEqual([r['id'] for r in self.client.get(base + f'?tag={tag.id}').json()['results']], [other.id])
+
+    def test_stranger_sees_only_public(self):
+        self.saved('friends')
+        public = self.saved('public', place=self.place2)
+        self.client.force_authenticate(self.stranger)
+        self.assertEqual([r['id'] for r in self.client.get(f'/api/users/{self.owner.id}/saved/').json()['results']],
+                         [public.id])
+
+    def test_my_own_page_shows_everything(self):
+        mine = SavedPlace.objects.create(user=self.user, place=self.place)  # private
+        ids = [r['id'] for r in self.client.get(f'/api/users/{self.user.id}/saved/').json()['results']]
+        self.assertEqual(ids, [mine.id])
+
+    def test_unknown_user_is_404(self):
+        self.assertEqual(self.client.get('/api/users/9999/saved/').status_code, 404)
+
+    def test_needs_login(self):
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get(f'/api/users/{self.owner.id}/saved/').status_code, 401)
+
+    def test_my_own_endpoints_still_owner_only(self):
+        theirs = self.saved('public')
+        self.assertEqual(self.client.patch(f'/api/saved/{theirs.id}/', {'note': 'x'}).status_code, 404)
+        self.assertEqual(self.client.delete(f'/api/saved/{theirs.id}/').status_code, 404)
+
+    def test_query_counts_are_flat(self):
+        tag = Tag.objects.create(owner=self.owner, name='T')
+        for i in range(3):
+            p = Place.objects.create(external_id=f'q{i}', source='google', name=f'Q{i}', lat=0, lng=0)
+            self.saved('friends', place=p).tags.add(tag)
+        with self.assertNumQueries(3):  # user, saved places + places, tags
+            self.client.get(f'/api/users/{self.owner.id}/saved/')

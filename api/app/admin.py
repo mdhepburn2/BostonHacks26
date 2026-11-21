@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import (Circle, CircleMembership, Friendship, NearbySearchCache, Place, PlaceCard, PlaceList, SavedPlace,
+from .models import (Circle, CircleMembership, Friendship, NearbySearchCache, Place, PlaceCard, SavedPlace, Tag,
                      TextSearchCache)
 
 
@@ -39,15 +39,14 @@ class SavedPlaceAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'place__name')
     list_select_related = ('user', 'place')
     raw_id_fields = ('place',)
+    filter_horizontal = ('tags',)
 
 
-@admin.register(PlaceList)
-class PlaceListAdmin(admin.ModelAdmin):
-    list_display = ('name', 'owner', 'visibility', 'updated_at')
-    list_filter = ('visibility',)
+@admin.register(Tag)
+class TagAdmin(admin.ModelAdmin):
+    list_display = ('name', 'owner', 'created_at')
     search_fields = ('name', 'owner__username')
     list_select_related = ('owner',)
-    filter_horizontal = ('items',)
 
 
 class CircleMembershipInline(admin.TabularInline):

@@ -8,16 +8,14 @@ urlpatterns = [
     path('places/search/', views.place_search, name='place-search'),
     path('places/<int:place_id>/', views.place_detail, name='place-detail'),
 
-    # Phase 2: accounts, saved places, lists
+    # Phase 2: accounts, saved places, tags
     path('auth/register/', views.register, name='register'),
     path('auth/login/', views.login, name='login'),
     path('me/', views.me, name='me'),
     path('saved/', views.saved_places, name='saved-places'),
     path('saved/<int:saved_id>/', views.saved_place_detail, name='saved-place-detail'),
-    path('lists/', views.place_lists, name='place-lists'),
-    path('lists/<int:list_id>/', views.place_list_detail, name='place-list-detail'),
-    path('lists/<int:list_id>/items/', views.place_list_items, name='place-list-items'),
-    path('lists/<int:list_id>/items/<int:saved_id>/', views.place_list_item_detail, name='place-list-item-detail'),
+    path('tags/', views.tags, name='tags'),
+    path('tags/<int:tag_id>/', views.tag_detail, name='tag-detail'),
 
     # Phase 3: social
     path('friends/', views.friends, name='friends'),
@@ -25,4 +23,5 @@ urlpatterns = [
     path('friends/requests/<int:request_id>/accept/', views.accept_friend_request, name='friend-request-accept'),
     path('friends/requests/<int:request_id>/decline/', views.decline_friend_request, name='friend-request-decline'),
     path('friends/<int:user_id>/', views.unfriend, name='unfriend'),
+    path('users/<int:user_id>/saved/', views.user_saved_places, name='user-saved-places'),
 ]

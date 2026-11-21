@@ -4,15 +4,19 @@ Views never filter by owner or visibility inline: they ask for a queryset from
 this module and 404 when the object isn't in it, so private objects can't be
 discovered by guessing ids.
 
-Phase 2 only has owner access (you can see and edit your own saved places and
-lists). Phase 3 adds who-is-friends-with-whom here, and next `visible_to(viewer)`
-helpers for friends' and circles' data.
+Editing is always owner-only (`own_*`). Seeing someone else's things follows
+their visibility (`visible_*`):
+
+    private  only the owner
+    friends  the owner + accepted friends
+    circle   the owner + members of the chosen circle (no circle -> owner only)
+    public   any logged-in user
 """
 
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 
-from .models import Circle, Friendship, PlaceList, SavedPlace
+from .models import Circle, Friendship, SavedPlace, Tag, Visibility
 
 
 def own_saved_places(user):
@@ -20,9 +24,9 @@ def own_saved_places(user):
     return SavedPlace.objects.filter(user=user)
 
 
-def own_lists(user):
-    """The user's lists, which only they can edit."""
-    return PlaceList.objects.filter(owner=user)
+def own_tags(user):
+    """The user's tags. Only they can see, use or edit them."""
+    return Tag.objects.filter(owner=user)
 
 
 def saved_for_card(user, place):
@@ -69,3 +73,22 @@ def are_friends(a, b):
 def incoming_requests(user):
     """Pending friend requests sent to the user. Only they can accept or decline these."""
     return Friendship.objects.filter(to_user=user, status=Friendship.STATUS_PENDING)
+
+
+# --- Visibility (Phase 3) -------------------------------------------------
+
+def _visible_q(viewer, owner_field):
+    """Q for rows whose visibility lets `viewer` see them. `owner_field` is the FK to the owner."""
+    if viewer is None or not viewer.is_authenticated:
+        return Q(pk__in=[])
+    return (
+        Q(**{owner_field: viewer})
+        | Q(visibility=Visibility.PUBLIC)
+        | Q(visibility=Visibility.FRIENDS, **{f'{owner_field}__in': friend_ids(viewer)})
+        | Q(visibility=Visibility.CIRCLE, circle__in=circles_for(viewer).values('pk'))
+    )
+
+
+def visible_saved_places(viewer):
+    """Every saved place `viewer` is allowed to see, going by each one's own visibility."""
+    return SavedPlace.objects.filter(_visible_q(viewer, 'user'))
