@@ -157,3 +157,28 @@ MAILERS = {
         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
     },
 }
+
+
+# External API keys (read from .env locally, from the host's env vars in production)
+
+GOOGLE_PLACES_KEY = os.environ.get('GOOGLE_PLACES_KEY', '')
+LLM_API_KEY = os.environ.get('LLM_API_KEY', '')
+MBTA_KEY = os.environ.get('MBTA_KEY', '')
+
+
+# Logging: send app logs (including per-step timings) to the console so they
+# show up in runserver output and Render's log stream.
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'simple': {'format': '%(levelname)s %(name)s: %(message)s'},
+    },
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler', 'formatter': 'simple'},
+    },
+    'loggers': {
+        'app': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+    },
+}
