@@ -10,6 +10,10 @@ django-cors-headers = "*"
 python-dotenv = "*"
 requests = "*"
 pillow = "*"
+gunicorn = "*"
+dj-database-url = "*"
+psycopg = {extras = ["binary"], version = "*"}
+whitenoise = "*"
 
 [dev-packages]
 
