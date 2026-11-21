@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'rest_framework.authtoken',
     'corsheaders',
     'app',
 ]
@@ -177,6 +178,11 @@ LLM_THINKING_LEVEL = os.environ.get('LLM_THINKING_LEVEL', 'minimal')
 REST_FRAMEWORK = {
     # JSON 500s for unexpected errors; see app/views.py.
     'EXCEPTION_HANDLER': 'app.views.exception_handler',
+    # The app sends "Authorization: Token <token>". No session auth, so no CSRF
+    # on the API (the admin still uses its own session login).
+    'DEFAULT_AUTHENTICATION_CLASSES': ['rest_framework.authentication.TokenAuthentication'],
+    # Everything needs a login unless the view says AllowAny (the Phase 1 place APIs do).
+    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
 }
 
 LOGGING = {

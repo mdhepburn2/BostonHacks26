@@ -196,6 +196,26 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 | POST | `/api/lists/<id>/items/` | Add a place (body: `place_id`) |
 | DELETE | `/api/lists/<id>/items/<saved_id>/` | Remove a place from a list |
 
+**Register / login:**
+- `POST /api/auth/register/` body: `username`, `password`, `email` (optional). 201 on success.
+- `POST /api/auth/login/` body: `username`, `password`. 200 on success, 400 with `{"detail": ...}` on a wrong username/password.
+- Usernames are unique ignoring case, and login ignores case.
+- Both return:
+```json
+{ "token": "", "user": { "id": 0, "username": "", "email": "" } }
+```
+- `GET /api/me/` returns the `user` object.
+
+**Saving and list rules:**
+- `GET /api/saved/` and `GET /api/lists/` return `{"results": [...]}`. `GET /api/saved/?visited=true|false` filters.
+- `POST /api/saved/` body: `place_id` plus any of `visited`, `visited_at`, `note`, `visibility`, `circle_id`. Returns 201, or 200 with the existing saved place (unchanged) if it was already saved. Use PATCH to edit it.
+- Sending `visited_at` marks the place visited. `visited: true` with no date uses today. `visited: false` clears the date. Future dates are rejected.
+- `visibility: "circle"` needs a `circle_id` for a circle the user belongs to. Any other visibility clears `circle_id`.
+- Unsaving a place removes it from the user's lists. Deleting a list, or removing an item from it, keeps the places saved.
+- `POST /api/lists/<id>/items/` returns the list shape: 201 if the place was added, 200 if it was already in the list. Item DELETE and list/saved DELETE return 204.
+- Phase 2 endpoints only reach the requester's own saved places and lists; anyone else's return 404.
+- `Circle` and `CircleMembership` models exist already (for the `circle` FK) but have no endpoints until Phase 3. Make them in the admin for now.
+
 **Saved place shape:**
 ```json
 {

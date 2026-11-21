@@ -936,3 +936,288 @@ class WarmCacheTests(TestCase):
         out = self.run_cmd('--only-search', '--no-cards')
         self.assertIn('failed', out)
         self.assertIn('Everything is cached.', out)
+
+
+# --- Accounts (step 14) ---------------------------------------------------
+
+import datetime
+
+from django.contrib.auth.models import User
+from django.utils import timezone
+from rest_framework.authtoken.models import Token
+
+from .models import Circle, CircleMembership, PlaceList, SavedPlace
+
+GOOD_PASSWORD = 'walk-the-freedom-trail'
+
+
+class AuthTests(APITestCase):
+    def test_register_returns_token_and_user(self):
+        response = self.client.post('/api/auth/register/',
+                                    {'username': 'matt', 'password': GOOD_PASSWORD, 'email': 'm@example.com'})
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(set(body), {'token', 'user'})
+        self.assertEqual(body['user']['username'], 'matt')
+        self.assertEqual(Token.objects.get(user__username='matt').key, body['token'])
+
+    def test_register_rejects_taken_username_ignoring_case(self):
+        User.objects.create_user('Matt', password=GOOD_PASSWORD)
+        response = self.client.post('/api/auth/register/', {'username': 'matt', 'password': GOOD_PASSWORD})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('username', response.json())
+
+    def test_register_rejects_weak_password(self):
+        response = self.client.post('/api/auth/register/', {'username': 'matt', 'password': '123'})
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(User.objects.filter(username='matt').exists())
+
+    def test_login_and_me(self):
+        User.objects.create_user('Matt', password=GOOD_PASSWORD)
+        response = self.client.post('/api/auth/login/', {'username': 'matt', 'password': GOOD_PASSWORD})
+        self.assertEqual(response.status_code, 200)
+        token = response.json()['token']
+
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {token}')
+        me = self.client.get('/api/me/')
+        self.assertEqual(me.status_code, 200)
+        self.assertEqual(me.json()['username'], 'Matt')
+
+    def test_login_wrong_password(self):
+        User.objects.create_user('matt', password=GOOD_PASSWORD)
+        response = self.client.post('/api/auth/login/', {'username': 'matt', 'password': 'nope'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_me_requires_login(self):
+        self.assertEqual(self.client.get('/api/me/').status_code, 401)
+        self.client.credentials(HTTP_AUTHORIZATION='Token bogus')
+        self.assertEqual(self.client.get('/api/me/').status_code, 401)
+
+    def test_place_apis_still_work_without_login(self):
+        self.assertEqual(self.client.get('/api/health/').status_code, 200)
+
+
+# --- Saved places (step 15) -----------------------------------------------
+
+SAVED_KEYS = {'id', 'place', 'visited', 'visited_at', 'note', 'visibility', 'circle_id', 'created_at'}
+LIST_KEYS = {'id', 'name', 'description', 'visibility', 'circle_id', 'items', 'visited_count', 'total_count'}
+
+
+class LoggedInTestCase(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user('matt', password=GOOD_PASSWORD)
+        self.other = User.objects.create_user('sam', password=GOOD_PASSWORD)
+        self.client.force_authenticate(self.user)
+        self.place = Place.objects.create(external_id='g1', source='google', name='Faneuil Hall', lat=42.36, lng=-71.056)
+        self.place2 = Place.objects.create(external_id='g2', source='google', name='Boston Common', lat=42.355, lng=-71.066)
+
+    def make_circle(self, owner, *members):
+        circle = Circle.objects.create(name='Crew', owner=owner)
+        CircleMembership.objects.create(circle=circle, user=owner, role=CircleMembership.ROLE_OWNER)
+        for m in members:
+            CircleMembership.objects.create(circle=circle, user=m)
+        return circle
+
+
+class SavedPlaceTests(LoggedInTestCase):
+    def test_save_returns_contract_shape(self):
+        response = self.client.post('/api/saved/', {'place_id': self.place.id})
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(set(body), SAVED_KEYS)
+        self.assertEqual(set(body['place']), SHORT_PLACE_KEYS)
+        self.assertEqual(body['visibility'], 'private')
+        self.assertFalse(body['visited'])
+        self.assertIsNone(body['visited_at'])
+
+    def test_saving_twice_returns_the_existing_one(self):
+        first = self.client.post('/api/saved/', {'place_id': self.place.id, 'note': 'go here'}).json()
+        again = self.client.post('/api/saved/', {'place_id': self.place.id})
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(again.json()['id'], first['id'])
+        self.assertEqual(again.json()['note'], 'go here')
+        self.assertEqual(SavedPlace.objects.count(), 1)
+
+    def test_unknown_place(self):
+        response = self.client.post('/api/saved/', {'place_id': 9999})
+        self.assertEqual(response.status_code, 400)
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get('/api/saved/').status_code, 401)
+
+    def test_list_only_shows_mine_and_filters_visited(self):
+        SavedPlace.objects.create(user=self.user, place=self.place, visited=True, visited_at=datetime.date(2026, 5, 1))
+        SavedPlace.objects.create(user=self.user, place=self.place2)
+        SavedPlace.objects.create(user=self.other, place=self.place)
+        self.assertEqual(len(self.client.get('/api/saved/').json()['results']), 2)
+        visited = self.client.get('/api/saved/?visited=true').json()['results']
+        self.assertEqual([s['place']['name'] for s in visited], ['Faneuil Hall'])
+        self.assertEqual(len(self.client.get('/api/saved/?visited=false').json()['results']), 1)
+
+    def test_mark_visited_with_date(self):
+        saved = SavedPlace.objects.create(user=self.user, place=self.place)
+        response = self.client.patch(f'/api/saved/{saved.id}/', {'visited_at': '2025-07-04'})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['visited'])
+        self.assertEqual(response.json()['visited_at'], '2025-07-04')
+
+    def test_mark_visited_defaults_to_today_and_unvisit_clears(self):
+        saved = SavedPlace.objects.create(user=self.user, place=self.place)
+        body = self.client.patch(f'/api/saved/{saved.id}/', {'visited': True}).json()
+        self.assertEqual(body['visited_at'], timezone.localdate().isoformat())
+        body = self.client.patch(f'/api/saved/{saved.id}/', {'visited': False}).json()
+        self.assertFalse(body['visited'])
+        self.assertIsNone(body['visited_at'])
+
+    def test_visit_date_rules(self):
+        saved = SavedPlace.objects.create(user=self.user, place=self.place)
+        future = (timezone.localdate() + datetime.timedelta(days=2)).isoformat()
+        self.assertEqual(self.client.patch(f'/api/saved/{saved.id}/', {'visited_at': future}).status_code, 400)
+        response = self.client.patch(f'/api/saved/{saved.id}/', {'visited': False, 'visited_at': '2025-01-01'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_cant_change_place(self):
+        saved = SavedPlace.objects.create(user=self.user, place=self.place)
+        response = self.client.patch(f'/api/saved/{saved.id}/', {'place_id': self.place2.id})
+        self.assertEqual(response.status_code, 400)
+
+    def test_other_users_saved_place_is_404(self):
+        theirs = SavedPlace.objects.create(user=self.other, place=self.place)
+        self.assertEqual(self.client.patch(f'/api/saved/{theirs.id}/', {'note': 'x'}).status_code, 404)
+        self.assertEqual(self.client.delete(f'/api/saved/{theirs.id}/').status_code, 404)
+        self.assertTrue(SavedPlace.objects.filter(pk=theirs.id).exists())
+
+    def test_unsave_removes_from_lists(self):
+        saved = SavedPlace.objects.create(user=self.user, place=self.place)
+        place_list = PlaceList.objects.create(owner=self.user, name='Todo')
+        place_list.items.add(saved)
+        self.assertEqual(self.client.delete(f'/api/saved/{saved.id}/').status_code, 204)
+        self.assertEqual(place_list.items.count(), 0)
+
+    def test_circle_visibility(self):
+        saved = SavedPlace.objects.create(user=self.user, place=self.place)
+        url = f'/api/saved/{saved.id}/'
+        mine = self.make_circle(self.user)
+        not_mine = self.make_circle(self.other)
+
+        self.assertEqual(self.client.patch(url, {'visibility': 'circle'}).status_code, 400)
+        self.assertEqual(self.client.patch(url, {'visibility': 'circle', 'circle_id': not_mine.id}).status_code, 400)
+        body = self.client.patch(url, {'visibility': 'circle', 'circle_id': mine.id}).json()
+        self.assertEqual(body['circle_id'], mine.id)
+        # Editing something else keeps the circle; switching visibility clears it.
+        self.assertEqual(self.client.patch(url, {'note': 'hi'}).json()['circle_id'], mine.id)
+        body = self.client.patch(url, {'visibility': 'friends'}).json()
+        self.assertEqual(body['visibility'], 'friends')
+        self.assertIsNone(body['circle_id'])
+
+    def test_member_can_share_with_circle(self):
+        circle = self.make_circle(self.other, self.user)
+        response = self.client.post('/api/saved/', {'place_id': self.place.id, 'visibility': 'circle',
+                                                    'circle_id': circle.id})
+        self.assertEqual(response.status_code, 201)
+
+
+@umock.patch.object(card_service, '_fetch_details', return_value=None)
+@umock.patch.object(card_service, '_fetch_wiki', return_value=None)
+@umock.patch.object(card_service, '_fetch_nearest_t', return_value={})
+@umock.patch.object(card_service.llm, 'write_bio', return_value='bio')
+class PlaceCardSavedTests(LoggedInTestCase):
+    def test_card_shows_my_saved_place(self, *mocks):
+        saved = SavedPlace.objects.create(user=self.user, place=self.place, visited=True,
+                                          visited_at=datetime.date(2026, 3, 2))
+        body = self.client.get(f'/api/places/{self.place.id}/').json()
+        self.assertEqual(body['saved'], {'id': saved.id, 'visited': True, 'visited_at': '2026-03-02'})
+
+    def test_card_ignores_other_users_saves(self, *mocks):
+        SavedPlace.objects.create(user=self.other, place=self.place)
+        self.assertIsNone(self.client.get(f'/api/places/{self.place.id}/').json()['saved'])
+        self.client.force_authenticate(None)
+        self.assertIsNone(self.client.get(f'/api/places/{self.place.id}/').json()['saved'])
+
+
+# --- Lists (step 16) ------------------------------------------------------
+
+class PlaceListTests(LoggedInTestCase):
+    def create_list(self, **extra):
+        response = self.client.post('/api/lists/', {'name': 'Date ideas', **extra})
+        self.assertEqual(response.status_code, 201, response.content)
+        return response.json()
+
+    def test_create_returns_contract_shape(self):
+        body = self.create_list(description='cute spots', visibility='friends')
+        self.assertEqual(set(body), LIST_KEYS)
+        self.assertEqual(body['items'], [])
+        self.assertEqual((body['visited_count'], body['total_count']), (0, 0))
+        self.assertEqual(body['visibility'], 'friends')
+
+    def test_name_required(self):
+        self.assertEqual(self.client.post('/api/lists/', {}).status_code, 400)
+
+    def test_add_item_saves_the_place_first(self):
+        lst = self.create_list()
+        response = self.client.post(f'/api/lists/{lst["id"]}/items/', {'place_id': self.place.id})
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(body['total_count'], 1)
+        self.assertEqual(set(body['items'][0]), SAVED_KEYS)
+        self.assertTrue(SavedPlace.objects.filter(user=self.user, place=self.place).exists())
+
+        again = self.client.post(f'/api/lists/{lst["id"]}/items/', {'place_id': self.place.id})
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(again.json()['total_count'], 1)
+
+    def test_add_item_reuses_existing_saved_place_and_counts_visited(self):
+        saved = SavedPlace.objects.create(user=self.user, place=self.place, visited=True,
+                                          visited_at=datetime.date(2026, 1, 1))
+        lst = self.create_list()
+        self.client.post(f'/api/lists/{lst["id"]}/items/', {'place_id': self.place.id})
+        body = self.client.post(f'/api/lists/{lst["id"]}/items/', {'place_id': self.place2.id}).json()
+        self.assertEqual(SavedPlace.objects.filter(user=self.user).count(), 2)
+        self.assertIn(saved.id, [i['id'] for i in body['items']])
+        self.assertEqual((body['visited_count'], body['total_count']), (1, 2))
+
+    def test_remove_item_keeps_it_saved(self):
+        lst = self.create_list()
+        body = self.client.post(f'/api/lists/{lst["id"]}/items/', {'place_id': self.place.id}).json()
+        saved_id = body['items'][0]['id']
+        self.assertEqual(self.client.delete(f'/api/lists/{lst["id"]}/items/{saved_id}/').status_code, 204)
+        self.assertEqual(self.client.get(f'/api/lists/{lst["id"]}/').json()['total_count'], 0)
+        self.assertTrue(SavedPlace.objects.filter(pk=saved_id).exists())
+        self.assertEqual(self.client.delete(f'/api/lists/{lst["id"]}/items/{saved_id}/').status_code, 404)
+
+    def test_edit_and_delete(self):
+        lst = self.create_list()
+        body = self.client.patch(f'/api/lists/{lst["id"]}/', {'name': 'Renamed', 'visibility': 'public'}).json()
+        self.assertEqual((body['name'], body['visibility']), ('Renamed', 'public'))
+        self.assertEqual(self.client.delete(f'/api/lists/{lst["id"]}/').status_code, 204)
+        self.assertFalse(PlaceList.objects.exists())
+
+    def test_index_only_shows_mine(self):
+        self.create_list()
+        PlaceList.objects.create(owner=self.other, name='Theirs', visibility='public')
+        names = [l['name'] for l in self.client.get('/api/lists/').json()['results']]
+        self.assertEqual(names, ['Date ideas'])
+
+    def test_other_users_list_is_404(self):
+        theirs = PlaceList.objects.create(owner=self.other, name='Theirs', visibility='public')
+        base = f'/api/lists/{theirs.id}/'
+        self.assertEqual(self.client.get(base).status_code, 404)
+        self.assertEqual(self.client.patch(base, {'name': 'x'}).status_code, 404)
+        self.assertEqual(self.client.delete(base).status_code, 404)
+        self.assertEqual(self.client.post(base + 'items/', {'place_id': self.place.id}).status_code, 404)
+        self.assertFalse(SavedPlace.objects.filter(user=self.user).exists())
+
+    def test_circle_visibility_needs_my_circle(self):
+        self.assertEqual(self.client.post('/api/lists/', {'name': 'x', 'visibility': 'circle'}).status_code, 400)
+        circle = self.make_circle(self.user)
+        body = self.create_list(visibility='circle', circle_id=circle.id)
+        self.assertEqual(body['circle_id'], circle.id)
+
+    def test_index_query_count_is_flat(self):
+        for i in range(3):
+            lst = PlaceList.objects.create(owner=self.user, name=f'L{i}')
+            lst.items.add(SavedPlace.objects.get_or_create(user=self.user, place=self.place)[0],
+                          SavedPlace.objects.get_or_create(user=self.user, place=self.place2)[0])
+        with self.assertNumQueries(3):  # lists, items, places
+            self.client.get('/api/lists/')

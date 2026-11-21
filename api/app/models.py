@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 
@@ -70,3 +71,92 @@ class PlaceCard(models.Model):
 
     def __str__(self):
         return f'Card: {self.place.name}'
+
+
+# --- Accounts, saving and lists (Phase 2) ---------------------------------
+
+class Visibility(models.TextChoices):
+    """Who can see a SavedPlace, PlaceList or Activity. Checks live in app/permissions.py."""
+
+    PRIVATE = 'private', 'Only me'
+    FRIENDS = 'friends', 'Friends'
+    CIRCLE = 'circle', 'A circle'
+    PUBLIC = 'public', 'Anyone logged in'
+
+
+class Circle(models.Model):
+    """A group of friends for making plans.
+
+    Created here because saved places and lists can be shared with a circle.
+    The circle endpoints come in Phase 3; until then circles are made in the admin.
+    """
+
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='owned_circles')
+    members = models.ManyToManyField(settings.AUTH_USER_MODEL, through='CircleMembership',
+                                     related_name='circles', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+
+class CircleMembership(models.Model):
+    """The owner has a row too (role=owner), so membership is the one thing to check."""
+
+    ROLE_OWNER = 'owner'
+    ROLE_MEMBER = 'member'
+    ROLE_CHOICES = [(ROLE_OWNER, 'Owner'), (ROLE_MEMBER, 'Member')]
+
+    circle = models.ForeignKey(Circle, on_delete=models.CASCADE, related_name='memberships')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='circle_memberships')
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES, default=ROLE_MEMBER)
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['circle', 'user'], name='unique_circle_member')]
+
+    def __str__(self):
+        return f'{self.user} in {self.circle}'
+
+
+class SavedPlace(models.Model):
+    """A place a user saved. The single source of truth for whether they've visited it."""
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='saved_places')
+    place = models.ForeignKey(Place, on_delete=models.CASCADE, related_name='saves')
+    visited = models.BooleanField(default=False)
+    visited_at = models.DateField(null=True, blank=True)  # whenever the user says they went
+    note = models.TextField(blank=True)
+    visibility = models.CharField(max_length=10, choices=Visibility.choices, default=Visibility.PRIVATE)
+    # Required when visibility is "circle". If the circle is deleted this becomes
+    # null and only the owner can see it.
+    circle = models.ForeignKey(Circle, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        constraints = [models.UniqueConstraint(fields=['user', 'place'], name='unique_saved_place')]
+
+    def __str__(self):
+        return f'{self.user} saved {self.place}'
+
+
+class PlaceList(models.Model):
+    """A named group of the owner's saved places."""
+
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='place_lists')
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    visibility = models.CharField(max_length=10, choices=Visibility.choices, default=Visibility.PRIVATE)
+    circle = models.ForeignKey(Circle, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    items = models.ManyToManyField(SavedPlace, related_name='lists', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at', '-id']
+
+    def __str__(self):
+        return self.name

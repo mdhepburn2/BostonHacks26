@@ -8,8 +8,8 @@
    save the card. Details, the Wikipedia lookup and the MBTA lookup run in parallel.
    A cached card with no T stop yet (MBTA failed last time, or the card is from
    before step 11) gets one on its next open.
-3. Friends interested and `saved` are live per request (Phase 2/3); for now they
-   are always 0 and None.
+3. `saved` (the requester's SavedPlace) and friends interested are live per
+   request. Friends interested is always 0 until step 19.
 
 Failures never crash the request:
 - details fail     -> card keeps whatever it had (null rating/price/hours on first open)
@@ -29,6 +29,7 @@ from datetime import timedelta
 from django.db import IntegrityError
 from django.utils import timezone
 
+from .. import permissions
 from ..geo import distance_m
 from ..models import Place, PlaceCard
 from . import google_places, llm, mbta, wiki
@@ -48,8 +49,8 @@ DETAIL_FIELDS = ('rating', 'rating_count', 'price_level', 'opening_hours')
 WIKI_FAILED = object()
 
 
-def get_card(place):
-    """Build the place card response for `place`. Never raises for upstream failures."""
+def get_card(place, user=None):
+    """Build the place card response for `place` as seen by `user`. Never raises for upstream failures."""
     timings = {}
     t = time.monotonic()
 
@@ -84,7 +85,7 @@ def get_card(place):
 
     logger.info('place card %d %r (details=%s, wiki=%s, mbta=%s, card=%s) timings_ms=%s',
                 place.id, place.name, need_details, need_wiki, need_mbta, card_status, timings)
-    return _response(place, card)
+    return _response(place, card, permissions.saved_for_card(user, place))
 
 
 # --- Place details --------------------------------------------------------
@@ -224,7 +225,7 @@ def _facts(place):
 
 # --- Response -------------------------------------------------------------
 
-def _response(place, card):
+def _response(place, card, saved=None):
     return {
         'id': place.id,
         'name': place.name,
@@ -235,7 +236,7 @@ def _response(place, card):
         'hours': place.opening_hours or None,
         'nearest_t': card.nearest_t or None,  # {} means "no T stop nearby"
         'friends_interested': 0,      # step 19
-        'saved': None,                # step 15
+        'saved': {'id': saved.id, 'visited': saved.visited, 'visited_at': saved.visited_at} if saved else None,
     }
 
 
