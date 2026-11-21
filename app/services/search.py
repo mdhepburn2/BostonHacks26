@@ -23,7 +23,7 @@ from django.utils import timezone
 from ..models import TextSearchCache
 from . import google_places
 from .candidates import upsert_places
-from .http import ExternalAPIError
+from .http import ExternalAPIError, unexpected
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +55,14 @@ def search_places(query, lat=None, lng=None):
 
     try:
         results = google_places.text_search(key, lat, lng, max_results=MAX_RESULTS)
-    except ExternalAPIError:
+    except Exception as exc:
         if cache:
-            logger.warning('search: google failed, serving stale cache for %r', key)
+            logger.warning('search: google failed, serving stale cache for %r (%s)', key, exc,
+                           exc_info=unexpected(exc))
             return _cached_places(cache)
+        if unexpected(exc):
+            logger.exception('search: text search crashed for %r', key)
+            raise ExternalAPIError(f'text search failed: {exc}') from exc
         raise
 
     places = upsert_places(_dedupe(results))
@@ -90,4 +94,6 @@ def _save_cache(key, places):
         cache.created_at = timezone.now()
         cache.save(update_fields=['created_at'])
         Through.objects.filter(textsearchcache=cache).delete()
-    Through.objects.bulk_create(Through(textsearchcache=cache, place=p) for p in places)
+    # ignore_conflicts: two requests refreshing the same query at once mustn't crash.
+    Through.objects.bulk_create((Through(textsearchcache=cache, place=p) for p in places),
+                                ignore_conflicts=True)

@@ -216,6 +216,15 @@ class CandidateTests(TestCase):
         self.assertEqual(candidates.get_candidates(self.lat, self.lng), [])
         self.assertFalse(NearbySearchCache.objects.exists())
 
+    def test_dedupe_prefers_best_name_over_closest(self, nearby, geo):
+        google = [g('g_isg', 'Isabella Stewart Gardner Museum', 42.3381, -71.0991)]
+        wiki_ = [w(1, 'Isabella Stewart Gardner Museum theft', 42.3381, -71.0991),  # closer
+                 w(2, 'Isabella Stewart Gardner Museum', 42.3384, -71.0991)]
+        merged = {m['external_id']: m for m in candidates.dedupe(google, wiki_)}
+        self.assertEqual(merged['g_isg']['wiki_title'], 'Isabella Stewart Gardner Museum')
+        self.assertIn('wiki:1', merged)  # the theft article stays its own row
+        self.assertNotIn('wiki:2', merged)
+
     def test_far_apart_same_name_is_not_merged(self, nearby, geo):
         nearby.return_value = [g('g_x', 'Faneuil Hall', 42.3600, -71.0568)]
         geo.return_value = [w(9, 'Faneuil Hall', 42.3650, -71.0568)]  # ~550m away
@@ -637,6 +646,39 @@ class PlaceCardTests(APITestCase):
         body = self.client.get(self.url).json()
         self.assertEqual(body['bio'], 'A historic market hall.')
         self.assertNotIn('wikipedia_summary', bio.call_args.args[0])
+        self.assertFalse(PlaceCard.objects.exists())  # rewritten once Wikipedia is back
+
+        geo.side_effect = None
+        geo.return_value = [w(1, 'Faneuil Hall', 42.3601, -71.0567)]
+        self.client.get(self.url)
+        self.assertEqual(bio.call_args.args[0]['wikipedia_summary'], 'Faneuil Hall is a marketplace.')
+        self.assertTrue(PlaceCard.objects.exists())
+
+    def test_prefers_exact_name_over_closer_partial_match(self, details, geo, summary, bio):
+        geo.return_value = [w(1, 'Faneuil Hall Marketplace fire', 42.3600, -71.0568),  # closer
+                            w(2, 'Faneuil Hall Marketplace', 42.3605, -71.0568)]
+        self.client.get(self.url)
+        summary.assert_called_once_with('Faneuil Hall Marketplace')
+
+    def test_subtopic_article_prefers_the_exact_title(self, details, geo, summary, bio):
+        geo.return_value = [w(1, 'Faneuil Hall Marketplace fire', 42.3600, -71.0568)]
+        self.client.get(self.url)
+        summary.assert_called_once_with('Faneuil Hall Marketplace')
+        self.place.refresh_from_db()
+        self.assertEqual(self.place.wiki_title, 'Faneuil Hall Marketplace')
+
+    def test_subtopic_article_is_kept_if_no_exact_title(self, details, geo, summary, bio):
+        geo.return_value = [w(1, 'Faneuil Hall Marketplace fire', 42.3600, -71.0568)]
+
+        def fake_summary(title):
+            if title == 'Faneuil Hall Marketplace':
+                raise ExternalAPIError('404')  # no article with the exact name
+            return 'A fire.'
+        summary.side_effect = fake_summary
+        self.client.get(self.url)
+        self.place.refresh_from_db()
+        self.assertEqual(self.place.wiki_title, 'Faneuil Hall Marketplace fire')
+        self.assertTrue(PlaceCard.objects.exists())
 
     def test_unrelated_nearby_article_is_ignored(self, details, geo, summary, bio):
         geo.return_value = [w(9, 'Quincy Market', 42.3601, -71.0560)]
@@ -721,3 +763,176 @@ class BioValidationTests(TestCase):
         with self.settings(LLM_API_KEY='k'), umock.patch.object(llm, '_generate', return_value={'bio': 'Hi.'}) as gen:
             self.assertEqual(llm.write_bio({'name': 'Old State House'}), 'Hi.')
         self.assertIn('Old State House', gen.call_args.kwargs['parts'][0]['text'])
+
+
+# --- Error handling (step 12) ---------------------------------------------
+
+from .services import google_places, http, wiki as wiki_service
+from .services import identify as identify_svc
+
+
+class ResponseShapeTests(TestCase):
+    def test_non_object_json_is_an_api_error(self):
+        resp = umock.Mock(status_code=200, **{'json.return_value': ['not', 'a', 'dict']})
+        with umock.patch.object(http.requests, 'request', return_value=resp):
+            with self.assertRaises(ExternalAPIError):
+                http.request_json('GET', 'https://x', label='t')
+
+    def test_google_skips_malformed_places(self):
+        data = {'places': [
+            {'id': 'ok', 'displayName': {'text': 'Good'}, 'location': {'latitude': 42.0, 'longitude': -71.0}},
+            {'displayName': {'text': 'No id'}, 'location': {'latitude': 42.0, 'longitude': -71.0}},
+            {'id': 'noloc', 'displayName': {'text': 'No location'}},
+            {'id': 'badlat', 'displayName': {'text': 'Bad'}, 'location': {'latitude': 'x', 'longitude': 1}},
+            'not a dict',
+        ]}
+        self.assertEqual([p['external_id'] for p in google_places._normalize_list(data)], ['ok'])
+        self.assertEqual(google_places._normalize_list({'places': 'nope'}), [])
+
+    def test_google_details_with_wrong_types_become_none(self):
+        bad = {'rating': 'great', 'userRatingCount': True, 'priceLevel': 3,
+               'regularOpeningHours': {'weekdayDescriptions': 'Mon 9-5'}}
+        with self.settings(GOOGLE_PLACES_KEY='k'), \
+                umock.patch.object(google_places, 'request_json', return_value=bad):
+            self.assertEqual(google_places.place_details('x'), {
+                'rating': None, 'rating_count': None, 'price_level': None, 'opening_hours': None})
+
+    def test_wiki_skips_malformed_pages(self):
+        data = {'query': {'geosearch': [
+            {'pageid': 1, 'title': 'Good', 'lat': 42.0, 'lon': -71.0},
+            {'title': 'No id', 'lat': 42.0, 'lon': -71.0},
+            {'pageid': 3, 'title': 'No coords'},
+        ]}}
+        with umock.patch.object(wiki_service, 'request_json', return_value=data):
+            self.assertEqual([p['name'] for p in wiki_service.geosearch(42, -71)], ['Good'])
+
+    def test_long_names_are_clipped_on_upsert(self):
+        item = g('long', 'x' * 400, 42.0, -71.0)
+        place = candidates.upsert_places([item])[0]
+        self.assertEqual(len(place.name), 255)
+
+
+class UnexpectedErrorTests(APITestCase):
+    """A bug inside a service call falls back like an upstream failure would."""
+
+    def test_candidates_survive_a_crashing_source(self):
+        with umock.patch.object(candidates.google_places, 'nearby_search', side_effect=KeyError('id')), \
+                umock.patch.object(candidates.wiki, 'geosearch', return_value=WIKI_RESULTS):
+            places = candidates.get_candidates(42.3600, -71.0568)
+        self.assertEqual(len(places), 2)
+        self.assertFalse(NearbySearchCache.objects.exists())
+
+    def test_identify_survives_a_crashing_vision_call(self):
+        place = Place.objects.create(external_id='a', source='google', name='A', lat=42.361, lng=-71.06)
+        with umock.patch.object(identify_svc.candidate_service, 'get_candidates', return_value=[place]), \
+                umock.patch.object(identify_svc.llm, 'match_photo', side_effect=TypeError('bug')):
+            out = identify_svc.identify(make_image(), 42.36, -71.06, 0)
+        self.assertEqual(out['status'], 'ambiguous')
+
+    def test_card_survives_crashing_services(self):
+        place = Place.objects.create(external_id='g', source='google', name='Spot', lat=42.36, lng=-71.06)
+        boom = umock.Mock(side_effect=RuntimeError('bug'))
+        with umock.patch.object(card_service.google_places, 'place_details', boom), \
+                umock.patch.object(card_service.wiki, 'geosearch', boom), \
+                umock.patch.object(card_service.mbta, 'nearest_stop', boom), \
+                umock.patch.object(card_service.llm, 'write_bio', boom):
+            response = self.client.get(f'/api/places/{place.id}/')
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['bio'], '')
+        self.assertIsNone(body['rating'])
+        self.assertIsNone(body['nearest_t'])
+
+    def test_search_crash_is_502(self):
+        with umock.patch.object(search_service.google_places, 'text_search', side_effect=KeyError('x')):
+            response = self.client.get('/api/places/search/', {'q': 'anything'})
+        self.assertEqual(response.status_code, 502)
+        self.assertIn('detail', response.json())
+
+    def test_unhandled_view_error_is_json_500(self):
+        place = Place.objects.create(external_id='g2', source='google', name='Spot', lat=42.36, lng=-71.06)
+        self.client.raise_request_exception = False
+        with umock.patch('app.views.get_card', side_effect=RuntimeError('bug')):
+            response = self.client.get(f'/api/places/{place.id}/')
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json(), {'detail': 'Something went wrong. Please try again.'})
+
+    def test_unknown_url_is_json_404(self):
+        response = self.client.get('/api/does-not-exist/')
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json(), {'detail': 'Not found.'})
+
+    def test_oversized_image_is_400(self):
+        image = make_image()
+        image.size = 16 * 1024 * 1024
+        with umock.patch('app.serializers.serializers.ImageField.to_internal_value', return_value=image):
+            response = self.client.post('/api/identify/', {'image': make_image(), 'lat': 42.36, 'lng': -71.06})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('image', response.json())
+
+
+# --- warm_cache command (step 13) -----------------------------------------
+
+from django.core.management import call_command
+
+from .management.commands import warm_cache
+
+
+class WarmCacheTests(TestCase):
+    def setUp(self):
+        self.places = [
+            Place.objects.create(external_id=f'p{i}', source='google', name=f'P{i}', lat=42.36, lng=-71.06)
+            for i in range(5)
+        ]
+        patches = {
+            'candidates': umock.patch.object(warm_cache, 'get_candidates', side_effect=self.fake_candidates),
+            'search': umock.patch.object(warm_cache, 'search_places', return_value=self.places[3:]),
+            'card': umock.patch.object(warm_cache, 'get_card', side_effect=self.fake_card),
+        }
+        self.mocks = {name: p.start() for name, p in patches.items()}
+        for p in patches.values():
+            self.addCleanup(p.stop)
+
+    def fake_candidates(self, lat, lng):
+        NearbySearchCache.objects.get_or_create(grid_key=candidates.grid_key(lat, lng))
+        return self.places
+
+    def fake_card(self, place):
+        PlaceCard.objects.get_or_create(place=place, defaults={'bio': 'b', 'nearest_t': {}})
+        return {'rating': None, 'nearest_t': None}
+
+    def run_cmd(self, *args):
+        out = io.StringIO()
+        call_command('warm_cache', *args, stdout=out)
+        return out.getvalue()
+
+    def test_warms_spots_with_neighbors_searches_and_cards(self):
+        out = self.run_cmd()
+        self.assertEqual(self.mocks['candidates'].call_count, len(warm_cache.SPOTS) * 9)
+        self.assertEqual(self.mocks['search'].call_count, len(warm_cache.SEARCHES))
+        # Closest 3 per spot (P0-P2) + top search result (P3), each built once.
+        self.assertEqual([c.args[0].name for c in self.mocks['card'].call_args_list], ['P0', 'P1', 'P2', 'P3'])
+        self.assertIn('Everything is cached.', out)
+
+    def test_flags(self):
+        self.run_cmd('--no-cards', '--no-neighbors', '--only-spots')
+        self.assertEqual(self.mocks['candidates'].call_count, len(warm_cache.SPOTS))
+        self.mocks['search'].assert_not_called()
+        self.mocks['card'].assert_not_called()
+
+    def test_reports_cards_that_need_a_rerun(self):
+        self.mocks['card'].side_effect = lambda place: {'rating': None, 'nearest_t': None}
+        out = self.run_cmd('--only-search')
+        self.assertIn('1 incomplete: P3', out)
+
+    def test_reports_cells_that_did_not_cache(self):
+        self.mocks['candidates'].side_effect = lambda lat, lng: self.places  # saves nothing
+        out = self.run_cmd('--only-spots', '--no-cards', '--no-neighbors')
+        self.assertIn('(1 cells not cached)', out)
+        self.assertIn(f'{len(warm_cache.SPOTS)} incomplete', out)
+
+    def test_search_failure_does_not_stop_the_run(self):
+        self.mocks['search'].side_effect = ExternalAPIError('down')
+        out = self.run_cmd('--only-search', '--no-cards')
+        self.assertIn('failed', out)
+        self.assertIn('Everything is cached.', out)

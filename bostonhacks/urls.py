@@ -21,3 +21,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('app.urls')),
 ]
+
+# JSON instead of HTML error pages (Django only uses these when DEBUG is off).
+handler404 = 'app.views.not_found'
+handler500 = 'app.views.server_error'

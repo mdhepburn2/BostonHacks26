@@ -174,6 +174,11 @@ LLM_THINKING_LEVEL = os.environ.get('LLM_THINKING_LEVEL', 'minimal')
 # Logging: send app logs (including per-step timings) to the console so they
 # show up in runserver output and Render's log stream.
 
+REST_FRAMEWORK = {
+    # JSON 500s for unexpected errors; see app/views.py.
+    'EXCEPTION_HANDLER': 'app.views.exception_handler',
+}
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,

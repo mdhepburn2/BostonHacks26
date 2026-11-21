@@ -22,11 +22,21 @@ class ExternalAPIError(Exception):
     """An external API call failed (network error, timeout, bad status or bad JSON)."""
 
 
+def unexpected(exc):
+    """True if `exc` is a bug rather than an upstream failure.
+
+    Fallback code catches every exception so a request never crashes, and
+    passes `exc_info=unexpected(exc)` so real bugs still get a traceback in the log.
+    """
+    return not isinstance(exc, ExternalAPIError)
+
+
 def request_json(method, url, *, label, headers=None, **kwargs):
     """Make an HTTP request and return the parsed JSON body.
 
     `label` names the call in the timing log, e.g. "google.nearby".
-    Raises ExternalAPIError on any failure.
+    Raises ExternalAPIError on any failure, including a body that isn't a JSON
+    object (every API we call returns one).
     """
     headers = {'User-Agent': USER_AGENT, **(headers or {})}
     start = time.monotonic()
@@ -35,7 +45,7 @@ def request_json(method, url, *, label, headers=None, **kwargs):
         elapsed_ms = (time.monotonic() - start) * 1000
         logger.info('%s %s in %.0fms', label, resp.status_code, elapsed_ms)
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
     except requests.HTTPError as exc:
         body = exc.response.text[:300] if exc.response is not None else ''
         logger.warning('%s failed: %s %s', label, exc, body)
@@ -44,3 +54,8 @@ def request_json(method, url, *, label, headers=None, **kwargs):
         elapsed_ms = (time.monotonic() - start) * 1000
         logger.warning('%s failed after %.0fms: %s', label, elapsed_ms, exc)
         raise ExternalAPIError(f'{label} failed: {exc}') from exc
+
+    if not isinstance(data, dict):
+        logger.warning('%s returned %s, expected a JSON object', label, type(data).__name__)
+        raise ExternalAPIError(f'{label} returned {type(data).__name__}, expected a JSON object')
+    return data

@@ -13,7 +13,7 @@ import time
 from .. import geo
 from . import candidates as candidate_service
 from . import llm
-from .http import ExternalAPIError
+from .http import unexpected
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +49,10 @@ def identify(image_file, lat, lng, heading=None):
         lap('resize')
         match = llm.match_photo(image_bytes, [_describe(p, lat, lng) for p in shortlist], lat, lng, heading)
         lap('vision')
-    except (ExternalAPIError, OSError) as exc:  # OSError: Pillow couldn't read the image
+    except Exception as exc:  # Gemini failed, or Pillow couldn't read the image
         lap('vision')
-        logger.warning('identify: vision match unavailable, returning closest candidates (%s)', exc)
+        logger.warning('identify: vision match unavailable, returning closest candidates (%s)', exc,
+                       exc_info=unexpected(exc))
         result = _response('ambiguous', None, shortlist[:TOP_N], 0.0)
         _log(lat, lng, heading, len(shortlist), result, timings)
         return result

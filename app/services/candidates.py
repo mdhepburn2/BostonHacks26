@@ -26,7 +26,7 @@ from django.utils import timezone
 from ..geo import distance_m
 from ..models import NearbySearchCache, Place
 from . import google_places, wiki
-from .http import ExternalAPIError
+from .http import unexpected
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +91,8 @@ def _fetch(lat, lng):
 def _result_or_empty(future, label):
     try:
         return future.result(), True
-    except ExternalAPIError as exc:
-        logger.warning('candidates: %s unavailable, continuing without it (%s)', label, exc)
+    except Exception as exc:
+        logger.warning('candidates: %s unavailable, continuing without it (%s)', label, exc, exc_info=unexpected(exc))
         return [], False
 
 
@@ -119,6 +119,22 @@ def names_match(a, b):
     return SequenceMatcher(None, a, b).ratio() >= DEDUPE_MIN_NAME_RATIO
 
 
+def is_subtopic(article_name, place_name):
+    """True if the article's name is the place's name plus more words, e.g. "... Museum theft"."""
+    a, p = _normalize_name(article_name), _normalize_name(place_name)
+    return bool(p) and a != p and f' {p} ' in f' {a} '
+
+
+def name_similarity(a, b):
+    """0 to 1, 1 for identical names. Used to pick the best of several names that all match.
+
+    "Isabella Stewart Gardner Museum" matches both the museum's article and
+    "Isabella Stewart Gardner Museum theft"; this ranks the museum first.
+    """
+    a, b = _normalize_name(a), _normalize_name(b)
+    return 1.0 if a == b else SequenceMatcher(None, a, b).ratio()
+
+
 def dedupe(google_results, wiki_results):
     """Merge the two result lists into one list of Place field dicts.
 
@@ -131,25 +147,33 @@ def dedupe(google_results, wiki_results):
     for item in google_results:
         merged.setdefault(item['external_id'], dict(item))
 
-    google_items = list(merged.values())
+    articles = {}
     for article in wiki_results:
-        match = _find_match(article, google_items)
-        if match is not None:
-            match.setdefault('wiki_title', article['wiki_title'])
-        else:
-            merged.setdefault(article['external_id'], dict(article))
+        articles.setdefault(article['external_id'], article)
+
+    # Pair each Google place with at most one article and vice versa. Best name
+    # first, then closest, so "Gardner Museum" gets the museum's article rather
+    # than the nearby one about its theft.
+    pairs = []
+    for item in merged.values():
+        for article in articles.values():
+            if not names_match(article['name'], item['name']):
+                continue
+            dist = distance_m(article['lat'], article['lng'], item['lat'], item['lng'])
+            if dist <= DEDUPE_MAX_DISTANCE_M:
+                pairs.append((-name_similarity(article['name'], item['name']), dist, item, article))
+    pairs.sort(key=lambda p: (p[0], p[1]))
+
+    matched = set()
+    for _, _, item, article in pairs:
+        if 'wiki_title' not in item and article['external_id'] not in matched:
+            item['wiki_title'] = article['wiki_title']
+            matched.add(article['external_id'])
+
+    for eid, article in articles.items():
+        if eid not in matched:
+            merged[eid] = dict(article)
     return list(merged.values())
-
-
-def _find_match(article, google_items):
-    best, best_dist = None, None
-    for item in google_items:
-        if 'wiki_title' in item or not names_match(article['name'], item['name']):
-            continue
-        dist = distance_m(article['lat'], article['lng'], item['lat'], item['lng'])
-        if dist <= DEDUPE_MAX_DISTANCE_M and (best_dist is None or dist < best_dist):
-            best, best_dist = item, dist
-    return best
 
 
 # --- DB writes ------------------------------------------------------------
@@ -162,6 +186,10 @@ def upsert_places(items):
         defaults = {field: item[field] for field in BASIC_FIELDS}
         if item.get('wiki_title'):
             defaults['wiki_title'] = item['wiki_title']
+        # Clip to the column lengths: SQLite ignores max_length, Postgres rejects the row.
+        for field in ('name', 'address', 'wiki_title'):
+            if field in defaults:
+                defaults[field] = defaults[field][:Place._meta.get_field(field).max_length]
         place, _ = Place.objects.update_or_create(external_id=item['external_id'], defaults=defaults)
         places.append(place)
     return places

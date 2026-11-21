@@ -13,7 +13,8 @@
 
 Failures never crash the request:
 - details fail     -> card keeps whatever it had (null rating/price/hours on first open)
-- Wikipedia fails  -> bio is written from the Place data alone
+- Wikipedia fails  -> bio is written from the Place data alone, but the card is
+                      NOT saved, so a later open can write it with the Wikipedia facts
 - MBTA fails       -> nearest_t is null, retried on the next open
 - no T stop nearby -> stored as {} so we don't ask again; returned as null
 - bio fails        -> fallback bio (the Wikipedia summary, or ''), and the card is
@@ -31,8 +32,8 @@ from django.utils import timezone
 from ..geo import distance_m
 from ..models import Place, PlaceCard
 from . import google_places, llm, mbta, wiki
-from .candidates import names_match
-from .http import ExternalAPIError
+from .candidates import is_subtopic, name_similarity, names_match
+from .http import ExternalAPIError, unexpected
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,9 @@ DETAILS_TTL = timedelta(days=7)
 WIKI_LOOKUP_RADIUS_M = 150
 
 DETAIL_FIELDS = ('rating', 'rating_count', 'price_level', 'opening_hours')
+
+# _fetch_wiki's result when the lookup failed, as opposed to None (no article found).
+WIKI_FAILED = object()
 
 
 def get_card(place):
@@ -55,6 +59,7 @@ def get_card(place):
     need_mbta = card is None or card.nearest_t is None
 
     details = wiki_info = nearest_t = None
+    wiki_failed = False
     if need_details or need_wiki or need_mbta:
         with ThreadPoolExecutor(max_workers=3) as pool:
             details_future = pool.submit(_fetch_details, place) if need_details else None
@@ -63,14 +68,15 @@ def get_card(place):
             details = details_future.result() if details_future else None
             wiki_info = wiki_future.result() if wiki_future else None
             nearest_t = mbta_future.result() if mbta_future else None
-        _save_place(place, details, wiki_info)
+        wiki_failed = wiki_info is WIKI_FAILED
+        _save_place(place, details, None if wiki_failed else wiki_info)
     timings['fetch'] = _lap(t)
     t = time.monotonic()
 
     card_status = 'cached'
     if card is None:
-        card = _build_card(place, nearest_t)
-        card_status = 'new' if card.pk else 'fallback'
+        card = _build_card(place, nearest_t, save=not wiki_failed)
+        card_status = 'new' if card.pk else 'not saved'
         timings['bio'] = _lap(t)
     elif nearest_t is not None:
         card.nearest_t = nearest_t
@@ -95,8 +101,8 @@ def _fetch_details(place):
     """Google details dict, or None if the call failed."""
     try:
         return google_places.place_details(place.external_id)
-    except ExternalAPIError as exc:
-        logger.warning('place card %d: details unavailable (%s)', place.id, exc)
+    except Exception as exc:
+        logger.warning('place card %d: details unavailable (%s)', place.id, exc, exc_info=unexpected(exc))
         return None
 
 
@@ -106,15 +112,15 @@ def _fetch_nearest_t(place):
     """Nearest T stop dict, {} if there's none nearby, or None if the call failed."""
     try:
         return mbta.nearest_stop(place.lat, place.lng) or {}
-    except ExternalAPIError as exc:
-        logger.warning('place card %d: mbta unavailable (%s)', place.id, exc)
+    except Exception as exc:
+        logger.warning('place card %d: mbta unavailable (%s)', place.id, exc, exc_info=unexpected(exc))
         return None
 
 
 # --- Wikipedia ------------------------------------------------------------
 
 def _fetch_wiki(place):
-    """(wiki_title, wiki_summary) for the place, or None if nothing was found.
+    """(wiki_title, wiki_summary) for the place, None if there's no article, or WIKI_FAILED.
 
     Google places from search usually have no wiki_title yet, so we look for a
     nearby article whose name matches (same rule the scan dedupe uses).
@@ -125,20 +131,39 @@ def _fetch_wiki(place):
             title = _find_wiki_title(place)
         if not title:
             return None
+        if is_subtopic(title, place.name):
+            exact = _exact_article(place.name)
+            if exact:
+                return place.name, exact
         return title, wiki.summary(title)
-    except ExternalAPIError as exc:
-        logger.warning('place card %d: wikipedia unavailable (%s)', place.id, exc)
-        return None
+    except Exception as exc:
+        logger.warning('place card %d: wikipedia unavailable (%s)', place.id, exc, exc_info=unexpected(exc))
+        return WIKI_FAILED
+
+
+def _exact_article(name):
+    """Summary of the article titled exactly `name`, or '' if there isn't one.
+
+    Only used when the nearby article is a subtopic of the place (the Gardner
+    Museum's own article isn't geotagged, but "Isabella Stewart Gardner Museum
+    theft" is), so we know the place is notable enough to have one.
+    """
+    try:
+        return wiki.summary(name)
+    except ExternalAPIError:  # usually a 404: no such article
+        return ''
 
 
 def _find_wiki_title(place):
-    best, best_dist = None, None
+    """Nearby article whose name best matches the place (closest wins a tie), or None."""
+    best, best_key = None, None
     for article in wiki.geosearch(place.lat, place.lng, radius=WIKI_LOOKUP_RADIUS_M):
         if not names_match(article['name'], place.name):
             continue
-        dist = distance_m(place.lat, place.lng, article['lat'], article['lng'])
-        if best_dist is None or dist < best_dist:
-            best, best_dist = article['wiki_title'], dist
+        key = (-name_similarity(article['name'], place.name),
+               distance_m(place.lat, place.lng, article['lat'], article['lng']))
+        if best_key is None or key < best_key:
+            best, best_key = article['wiki_title'], key
     return best
 
 
@@ -158,13 +183,19 @@ def _save_place(place, details, wiki_info):
 
 # --- Bio ------------------------------------------------------------------
 
-def _build_card(place, nearest_t):
-    """Write the bio and save a PlaceCard. If the LLM fails, return an unsaved card."""
+def _build_card(place, nearest_t, save=True):
+    """Write the bio and save a PlaceCard.
+
+    Returns an unsaved card if the LLM fails, or if `save` is False (the facts
+    were incomplete, so the bio shouldn't be kept forever).
+    """
     try:
         bio = llm.write_bio(_facts(place))
-    except ExternalAPIError as exc:
-        logger.warning('place card %d: bio unavailable, using fallback (%s)', place.id, exc)
+    except Exception as exc:
+        logger.warning('place card %d: bio unavailable, using fallback (%s)', place.id, exc, exc_info=unexpected(exc))
         return PlaceCard(place=place, bio=place.wiki_summary or '', nearest_t=nearest_t)
+    if not save:
+        return PlaceCard(place=place, bio=bio, nearest_t=nearest_t)
 
     try:
         card, _ = PlaceCard.objects.get_or_create(place=place, defaults={'bio': bio, 'nearest_t': nearest_t})

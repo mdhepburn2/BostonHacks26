@@ -64,27 +64,41 @@ def _circle(lat, lng, radius):
 
 
 def _normalize(place):
-    """Turn a Places API place into a dict of Place model fields."""
+    """Turn a Places API place into a dict of Place model fields, or None if it's unusable."""
+    if not isinstance(place, dict):
+        return None
     location = place.get('location') or {}
-    return {
-        'external_id': place['id'],
+    name = (place.get('displayName') or {}).get('text')
+    types = place.get('types')
+    item = {
+        'external_id': place.get('id'),
         'source': 'google',
-        'name': (place.get('displayName') or {}).get('text', ''),
-        'address': place.get('formattedAddress', ''),
-        'lat': location.get('latitude'),
-        'lng': location.get('longitude'),
-        'types': place.get('types', []),
+        'name': name if isinstance(name, str) else '',
+        'address': place.get('formattedAddress') if isinstance(place.get('formattedAddress'), str) else '',
+        'lat': _number(location.get('latitude')),
+        'lng': _number(location.get('longitude')),
+        'types': [t for t in types if isinstance(t, str)] if isinstance(types, list) else [],
         'raw_data': place,
     }
+    if not isinstance(item['external_id'], str) or not item['external_id'] or not item['name']:
+        return None
+    if item['lat'] is None or item['lng'] is None:
+        return None
+    return item
 
 
 def _normalize_list(data):
-    results = []
-    for place in data.get('places', []):
-        item = _normalize(place)
-        if item['external_id'] and item['name'] and item['lat'] is not None and item['lng'] is not None:
-            results.append(item)
-    return results
+    places = data.get('places')
+    if not isinstance(places, list):
+        return []
+    return [item for item in map(_normalize, places) if item is not None]
+
+
+def _number(value):
+    """value as a float, or None if it isn't a number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 def nearby_search(lat, lng, radius=NEARBY_RADIUS_M, max_results=20):
@@ -126,11 +140,16 @@ def place_details(place_id):
         'GET', f'{BASE_URL}/places/{place_id}',
         label='google.details', headers=_headers(DETAILS_FIELDS),
     )
+    # Anything with the wrong type is treated as missing so it can't break the save.
     hours = (data.get('regularOpeningHours') or {}).get('weekdayDescriptions')
+    if not isinstance(hours, list) or not all(isinstance(h, str) for h in hours):
+        hours = None
+    count = data.get('userRatingCount')
+    price = data.get('priceLevel')
     return {
-        'rating': data.get('rating'),
-        'rating_count': data.get('userRatingCount'),
-        'price_level': data.get('priceLevel'),
+        'rating': _number(data.get('rating')),
+        'rating_count': count if isinstance(count, int) and not isinstance(count, bool) else None,
+        'price_level': price if isinstance(price, str) else None,
         'opening_hours': hours or None,
     }
 

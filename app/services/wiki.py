@@ -29,8 +29,11 @@ def geosearch(lat, lng, radius=GEOSEARCH_RADIUS_M, limit=20):
         'format': 'json',
     }
     data = request_json('GET', API_URL, label='wiki.geosearch', params=params)
+    pages = (data.get('query') or {}).get('geosearch')
     results = []
-    for page in data.get('query', {}).get('geosearch', []):
+    for page in pages if isinstance(pages, list) else []:
+        if not _valid_page(page):
+            continue
         results.append({
             'external_id': f'wiki:{page["pageid"]}',
             'source': 'wiki',
@@ -45,6 +48,16 @@ def geosearch(lat, lng, radius=GEOSEARCH_RADIUS_M, limit=20):
     return results
 
 
+def _valid_page(page):
+    return (
+        isinstance(page, dict)
+        and page.get('pageid') is not None
+        and isinstance(page.get('title'), str) and page['title']
+        and all(isinstance(page.get(k), (int, float)) and not isinstance(page.get(k), bool)
+                for k in ('lat', 'lon'))
+    )
+
+
 def summary(title):
     """Plain-text intro for an article title, or '' if the article has none.
 
@@ -55,4 +68,5 @@ def summary(title):
     data = request_json('GET', url, label='wiki.summary', params={'redirect': 'true'})
     if data.get('type') == 'disambiguation':
         return ''
-    return data.get('extract', '')
+    extract = data.get('extract')
+    return extract if isinstance(extract, str) else ''
