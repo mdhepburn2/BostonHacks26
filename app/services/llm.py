@@ -120,6 +120,8 @@ def _generate(parts, schema, label):
             'temperature': 0,
         },
     }
+    if settings.LLM_THINKING_LEVEL:
+        body['generationConfig']['thinkingConfig'] = {'thinkingLevel': settings.LLM_THINKING_LEVEL}
     start = time.monotonic()
     data = request_json(
         'POST', f'{BASE_URL}/{settings.LLM_MODEL}:generateContent',

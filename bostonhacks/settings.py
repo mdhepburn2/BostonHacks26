@@ -164,7 +164,11 @@ MAILERS = {
 GOOGLE_PLACES_KEY = os.environ.get('GOOGLE_PLACES_KEY', '')
 LLM_API_KEY = os.environ.get('LLM_API_KEY', '')
 MBTA_KEY = os.environ.get('MBTA_KEY', '')
-LLM_MODEL = os.environ.get('LLM_MODEL', 'gemini-3.8-flash')
+# Flash-lite answers in ~1s on the free tier; the bigger flash models took 10s+
+# (over the 8s timeout) or returned 503 when we tested them. Set LLM_THINKING_LEVEL
+# to '' to omit thinkingConfig (needed for models that don't support it).
+LLM_MODEL = os.environ.get('LLM_MODEL', 'gemini-3.5-flash-lite')
+LLM_THINKING_LEVEL = os.environ.get('LLM_THINKING_LEVEL', 'minimal')
 
 
 # Logging: send app logs (including per-step timings) to the console so they
