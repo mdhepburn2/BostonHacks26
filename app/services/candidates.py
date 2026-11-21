@@ -64,7 +64,7 @@ def get_candidates(lat, lng):
     google_results, wiki_results, complete = _fetch(center_lat, center_lng)
 
     merged = dedupe(google_results, wiki_results)
-    places = _upsert(merged)
+    places = upsert_places(merged)
     if complete:
         _save_cache(key, places)
 
@@ -155,7 +155,7 @@ def _find_match(article, google_items):
 # --- DB writes ------------------------------------------------------------
 
 @transaction.atomic
-def _upsert(items):
+def upsert_places(items):
     """Create or update a Place per item, keyed on external_id. Returns the Places."""
     places = []
     for item in items:

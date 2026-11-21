@@ -1,8 +1,8 @@
 """Hardcoded Boston places for the Phase 1 mock endpoints.
 
 These let the frontend build against the real response shapes before the
-Google / Wikipedia / LLM services exist. Delete this module once steps 9-10
-replace the remaining mock views.
+Google / Wikipedia / LLM services exist. Delete this module once step 10
+replaces the mock place card.
 """
 
 MOCK_PLACES = [
@@ -125,24 +125,6 @@ MOCK_PLACES = [
 ]
 
 _BY_ID = {p['id']: p for p in MOCK_PLACES}
-
-
-def search(query):
-    """Case-insensitive substring match on name."""
-    q = ' '.join(query.lower().split())
-    return {
-        'results': [
-            {
-                'id': p['id'],
-                'name': p['name'],
-                'address': p['address'],
-                'lat': p['lat'],
-                'lng': p['lng'],
-            }
-            for p in MOCK_PLACES
-            if q in p['name'].lower()
-        ]
-    }
 
 
 def place_card(place_id):

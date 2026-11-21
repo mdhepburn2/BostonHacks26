@@ -85,18 +85,6 @@ class IdentifyTests(APITestCase):
 class SearchTests(APITestCase):
     url = '/api/places/search/'
 
-    def test_returns_contract_shape(self):
-        response = self.client.get(self.url, {'q': '  Faneuil   HALL '})
-        self.assertEqual(response.status_code, 200)
-        results = response.json()['results']
-        self.assertEqual(len(results), 1)
-        self.assertEqual(set(results[0]), {'id', 'name', 'address', 'lat', 'lng'})
-
-    def test_no_match_returns_empty_list(self):
-        response = self.client.get(self.url, {'q': 'zzz nothing'})
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {'results': []})
-
     def test_missing_query_is_400(self):
         self.assertEqual(self.client.get(self.url).status_code, 400)
 
@@ -477,3 +465,83 @@ class IdentifyFlowTests(TestCase):
         out = self.run_identify()
         self.assertEqual(out, {'status': 'not_found', 'place': None, 'candidates': [], 'confidence': 0.0})
         match.assert_not_called()
+
+
+# --- Search with caching (step 9) -----------------------------------------
+
+from .models import TextSearchCache
+from .services import search as search_service
+
+SEARCH_RESULTS = [
+    g('g_bpl', 'Boston Public Library', 42.3493, -71.0782),
+    g('g_bpl_branch', 'Boston Public Library - West End', 42.3637, -71.0661),
+    g('g_bpl', 'Boston Public Library', 42.3493, -71.0782),  # duplicate from Google
+]
+
+
+@umock.patch.object(search_service.google_places, 'text_search')
+class SearchServiceTests(APITestCase):
+    url = '/api/places/search/'
+
+    def get(self, **params):
+        return self.client.get(self.url, {'q': '  Boston   PUBLIC library ', **params})
+
+    def test_normalize_query(self, _):
+        self.assertEqual(search_service.normalize_query('  Faneuil   HALL '), 'faneuil hall')
+
+    def test_miss_calls_google_upserts_and_caches_in_order(self, text_search):
+        text_search.return_value = SEARCH_RESULTS
+        response = self.get(lat=42.35, lng=-71.06)
+        self.assertEqual(response.status_code, 200)
+        results = response.json()['results']
+        self.assertEqual([r['name'] for r in results],
+                         ['Boston Public Library', 'Boston Public Library - West End'])
+        self.assertEqual(set(results[0]), {'id', 'name', 'address', 'lat', 'lng'})
+        text_search.assert_called_once_with('boston public library', 42.35, -71.06,
+                                            max_results=search_service.MAX_RESULTS)
+        self.assertEqual(Place.objects.count(), 2)
+        self.assertTrue(TextSearchCache.objects.filter(query='boston public library').exists())
+
+    def test_order_survives_cache(self, text_search):
+        text_search.return_value = list(reversed(SEARCH_RESULTS[:2]))
+        first = [r['id'] for r in self.get().json()['results']]
+        second = [r['id'] for r in self.get().json()['results']]
+        self.assertEqual(first, second)
+        self.assertEqual(text_search.call_count, 1)
+
+    def test_hit_skips_google(self, text_search):
+        text_search.return_value = SEARCH_RESULTS
+        self.get()
+        self.client.get(self.url, {'q': 'boston public LIBRARY'})
+        self.assertEqual(text_search.call_count, 1)
+
+    def test_no_location_passes_none(self, text_search):
+        text_search.return_value = []
+        self.assertEqual(self.get().json(), {'results': []})
+        text_search.assert_called_once_with('boston public library', None, None,
+                                            max_results=search_service.MAX_RESULTS)
+
+    def test_expired_cache_refetches_and_replaces(self, text_search):
+        text_search.return_value = SEARCH_RESULTS
+        self.get()
+        TextSearchCache.objects.update(created_at=timezone.now() - timedelta(days=8))
+        text_search.return_value = SEARCH_RESULTS[1:2]
+        results = self.get().json()['results']
+        self.assertEqual([r['name'] for r in results], ['Boston Public Library - West End'])
+        self.assertEqual(text_search.call_count, 2)
+
+    def test_google_failure_without_cache_is_502(self, text_search):
+        text_search.side_effect = ExternalAPIError('boom')
+        response = self.get()
+        self.assertEqual(response.status_code, 502)
+        self.assertIn('detail', response.json())
+        self.assertFalse(TextSearchCache.objects.exists())
+
+    def test_google_failure_with_stale_cache_serves_it(self, text_search):
+        text_search.return_value = SEARCH_RESULTS
+        self.get()
+        TextSearchCache.objects.update(created_at=timezone.now() - timedelta(days=8))
+        text_search.side_effect = ExternalAPIError('boom')
+        response = self.get()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()['results']), 2)

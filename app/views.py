@@ -6,7 +6,9 @@ from rest_framework.response import Response
 
 from .serializers import IdentifyInputSerializer, SearchInputSerializer
 from .services import mock
+from .services.http import ExternalAPIError
 from .services.identify import identify as identify_photo
+from .services.search import search_places
 
 
 @api_view(['GET'])
@@ -15,9 +17,9 @@ def health(request):
     return Response({'status': 'ok'})
 
 
-# Phase 1 place endpoints. Search and the place card still return mock data
-# (app/services/mock.py) with the real response shapes; steps 9-10 swap them
-# for the real services.
+# Phase 1 place endpoints. The place card still returns mock data
+# (app/services/mock.py) with the real response shape; step 10 swaps it
+# for the real service.
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -34,7 +36,18 @@ def identify(request):
 def place_search(request):
     data = SearchInputSerializer(data=request.query_params)
     data.is_valid(raise_exception=True)
-    return Response(mock.search(data.validated_data['q']))
+    v = data.validated_data
+    try:
+        places = search_places(v['q'], v.get('lat'), v.get('lng'))
+    except ExternalAPIError:
+        return Response(
+            {'detail': "Search isn't available right now. Please try again in a moment."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+    return Response({'results': [
+        {'id': p.id, 'name': p.name, 'address': p.address, 'lat': p.lat, 'lng': p.lng}
+        for p in places
+    ]})
 
 
 @api_view(['GET'])
