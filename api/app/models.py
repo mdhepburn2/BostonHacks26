@@ -160,3 +160,39 @@ class PlaceList(models.Model):
 
     def __str__(self):
         return self.name
+
+
+# --- Social (Phase 3) -----------------------------------------------------
+
+class Friendship(models.Model):
+    """A friend request from one user to another.
+
+    Two users are friends when an accepted row exists in either direction.
+    Friend checks go through app/permissions.py.
+    """
+
+    STATUS_PENDING = 'pending'
+    STATUS_ACCEPTED = 'accepted'
+    STATUS_DECLINED = 'declined'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_ACCEPTED, 'Accepted'),
+        (STATUS_DECLINED, 'Declined'),
+    ]
+
+    from_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                                  related_name='friend_requests_sent')
+    to_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                                related_name='friend_requests_received')
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        constraints = [
+            models.UniqueConstraint(fields=['from_user', 'to_user'], name='unique_friendship'),
+            models.CheckConstraint(condition=~models.Q(from_user=models.F('to_user')), name='no_self_friendship'),
+        ]
+
+    def __str__(self):
+        return f'{self.from_user} -> {self.to_user} ({self.status})'

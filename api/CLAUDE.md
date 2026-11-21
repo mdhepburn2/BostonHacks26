@@ -266,6 +266,25 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 | GET / PATCH / DELETE | `/api/activities/<id>/` | View, edit, delete (author only for edit/delete) |
 | POST / DELETE | `/api/activities/<id>/respond/` | Reply interested/going (body: `status`) / remove reply |
 
+**Friends:**
+- `GET /api/friends/` returns `{"results": [{"id": 0, "username": ""}]}`, A to Z.
+- `GET /api/friends/requests/` returns `{"results": [<friend request shape>]}`: pending requests sent to me, newest first.
+- `POST /api/friends/requests/` body: `username` (ignores case). Returns 201 with the new request, or 200 with the existing one if I already asked. If they already asked me, this accepts their request instead (200, `status: "accepted"`). Re-sending after they declined puts it back in their requests (201). 404 for an unknown username, 400 for myself or someone I'm already friends with.
+- Accept / decline only work on pending requests sent to me (anything else is 404) and return the request shape. Accepting removes any other request between the two users.
+- `DELETE /api/friends/<user_id>/` returns 204, or 404 if we aren't friends. It clears every request between the two users so either can send a new one.
+- Friend checks (`friends_of`, `are_friends`, `friend_ids`) live in `app/permissions.py`.
+
+**Friend request shape:**
+```json
+{
+  "id": 0,
+  "from_user": { "id": 0, "username": "" },
+  "to_user": { "id": 0, "username": "" },
+  "status": "pending | accepted | declined",
+  "created_at": ""
+}
+```
+
 **Activity shape:**
 ```json
 {

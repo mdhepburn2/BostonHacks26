@@ -18,4 +18,11 @@ urlpatterns = [
     path('lists/<int:list_id>/', views.place_list_detail, name='place-list-detail'),
     path('lists/<int:list_id>/items/', views.place_list_items, name='place-list-items'),
     path('lists/<int:list_id>/items/<int:saved_id>/', views.place_list_item_detail, name='place-list-item-detail'),
+
+    # Phase 3: social
+    path('friends/', views.friends, name='friends'),
+    path('friends/requests/', views.friend_requests, name='friend-requests'),
+    path('friends/requests/<int:request_id>/accept/', views.accept_friend_request, name='friend-request-accept'),
+    path('friends/requests/<int:request_id>/decline/', views.decline_friend_request, name='friend-request-decline'),
+    path('friends/<int:user_id>/', views.unfriend, name='unfriend'),
 ]

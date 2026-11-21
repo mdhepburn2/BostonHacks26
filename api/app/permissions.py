@@ -5,10 +5,14 @@ this module and 404 when the object isn't in it, so private objects can't be
 discovered by guessing ids.
 
 Phase 2 only has owner access (you can see and edit your own saved places and
-lists). Phase 3 adds `visible_to(viewer)` helpers for friends' and circles' data.
+lists). Phase 3 adds who-is-friends-with-whom here, and next `visible_to(viewer)`
+helpers for friends' and circles' data.
 """
 
-from .models import Circle, PlaceList, SavedPlace
+from django.contrib.auth import get_user_model
+from django.db.models import Q
+
+from .models import Circle, Friendship, PlaceList, SavedPlace
 
 
 def own_saved_places(user):
@@ -36,3 +40,32 @@ def circles_for(user):
 def circle_for_sharing(user, circle_id):
     """The circle with this id if the user may share things with it, else None."""
     return circles_for(user).filter(pk=circle_id).first()
+
+
+# --- Friends (Phase 3) ----------------------------------------------------
+
+def friendships_between(a, b):
+    """Every Friendship row between two users, in either direction."""
+    return Friendship.objects.filter(Q(from_user=a, to_user=b) | Q(from_user=b, to_user=a))
+
+
+def friend_ids(user):
+    """Subquery of the ids of the user's accepted friends (either direction)."""
+    accepted = Friendship.objects.filter(status=Friendship.STATUS_ACCEPTED)
+    sent = accepted.filter(from_user=user).values('to_user')
+    received = accepted.filter(to_user=user).values('from_user')
+    return get_user_model().objects.filter(Q(pk__in=sent) | Q(pk__in=received)).values('pk')
+
+
+def friends_of(user):
+    """The user's accepted friends, A to Z."""
+    return get_user_model().objects.filter(pk__in=friend_ids(user)).order_by('username')
+
+
+def are_friends(a, b):
+    return friendships_between(a, b).filter(status=Friendship.STATUS_ACCEPTED).exists()
+
+
+def incoming_requests(user):
+    """Pending friend requests sent to the user. Only they can accept or decline these."""
+    return Friendship.objects.filter(to_user=user, status=Friendship.STATUS_PENDING)

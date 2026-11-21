@@ -1221,3 +1221,155 @@ class PlaceListTests(LoggedInTestCase):
                           SavedPlace.objects.get_or_create(user=self.user, place=self.place2)[0])
         with self.assertNumQueries(3):  # lists, items, places
             self.client.get('/api/lists/')
+
+
+# --- Friendships (step 17) ------------------------------------------------
+
+from .models import Friendship
+from . import permissions as perms
+
+REQUEST_KEYS = {'id', 'from_user', 'to_user', 'status', 'created_at'}
+
+
+class FriendshipTests(LoggedInTestCase):
+    def setUp(self):
+        super().setUp()
+        self.third = User.objects.create_user('alex', password=GOOD_PASSWORD)
+
+    def send(self, username):
+        return self.client.post('/api/friends/requests/', {'username': username})
+
+    def as_user(self, user):
+        self.client.force_authenticate(user)
+
+    def befriend(self, a, b):
+        return Friendship.objects.create(from_user=a, to_user=b, status=Friendship.STATUS_ACCEPTED)
+
+    def test_send_request_returns_shape(self):
+        response = self.send('sam')
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(set(body), REQUEST_KEYS)
+        self.assertEqual(body['from_user'], {'id': self.user.id, 'username': 'matt'})
+        self.assertEqual(body['to_user'], {'id': self.other.id, 'username': 'sam'})
+        self.assertEqual(body['status'], 'pending')
+
+    def test_username_ignores_case(self):
+        self.assertEqual(self.send('SAM').status_code, 201)
+
+    def test_unknown_user_is_404(self):
+        self.assertEqual(self.send('nobody').status_code, 404)
+
+    def test_cant_friend_yourself(self):
+        self.assertEqual(self.send('matt').status_code, 400)
+        self.assertFalse(Friendship.objects.exists())
+
+    def test_missing_username_is_400(self):
+        self.assertEqual(self.client.post('/api/friends/requests/', {}).status_code, 400)
+
+    def test_sending_twice_returns_existing(self):
+        first = self.send('sam').json()
+        again = self.send('sam')
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(again.json()['id'], first['id'])
+        self.assertEqual(Friendship.objects.count(), 1)
+
+    def test_already_friends_is_400(self):
+        self.befriend(self.other, self.user)
+        self.assertEqual(self.send('sam').status_code, 400)
+
+    def test_asking_back_accepts_their_request(self):
+        theirs = Friendship.objects.create(from_user=self.other, to_user=self.user)
+        response = self.send('sam')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['id'], theirs.id)
+        self.assertEqual(response.json()['status'], 'accepted')
+        self.assertTrue(perms.are_friends(self.user, self.other))
+        self.assertEqual(Friendship.objects.count(), 1)
+
+    def test_resending_after_decline_reopens_it(self):
+        mine = Friendship.objects.create(from_user=self.user, to_user=self.other, status=Friendship.STATUS_DECLINED)
+        response = self.send('sam')
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()['id'], mine.id)
+        self.assertEqual(response.json()['status'], 'pending')
+
+    def test_incoming_requests_only_shows_pending_to_me(self):
+        incoming = Friendship.objects.create(from_user=self.other, to_user=self.user)
+        Friendship.objects.create(from_user=self.user, to_user=self.third)  # sent by me
+        Friendship.objects.create(from_user=self.third, to_user=self.other)  # not mine at all
+        response = self.client.get('/api/friends/requests/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([r['id'] for r in response.json()['results']], [incoming.id])
+
+    def test_accept(self):
+        req = Friendship.objects.create(from_user=self.other, to_user=self.user)
+        response = self.client.post(f'/api/friends/requests/{req.id}/accept/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['status'], 'accepted')
+        self.assertEqual([f['username'] for f in self.client.get('/api/friends/').json()['results']], ['sam'])
+        self.as_user(self.other)
+        self.assertEqual([f['username'] for f in self.client.get('/api/friends/').json()['results']], ['matt'])
+
+    def test_accept_clears_crossed_requests(self):
+        req = Friendship.objects.create(from_user=self.other, to_user=self.user)
+        Friendship.objects.create(from_user=self.user, to_user=self.other)  # sent at the same time
+        self.client.post(f'/api/friends/requests/{req.id}/accept/')
+        self.assertEqual(list(Friendship.objects.values_list('id', flat=True)), [req.id])
+
+    def test_decline(self):
+        req = Friendship.objects.create(from_user=self.other, to_user=self.user)
+        response = self.client.post(f'/api/friends/requests/{req.id}/decline/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['status'], 'declined')
+        self.assertFalse(perms.are_friends(self.user, self.other))
+        self.assertEqual(self.client.get('/api/friends/requests/').json()['results'], [])
+
+    def test_only_the_recipient_can_answer(self):
+        mine = Friendship.objects.create(from_user=self.user, to_user=self.other)
+        theirs = Friendship.objects.create(from_user=self.other, to_user=self.third)
+        for req in (mine, theirs):
+            for action in ('accept', 'decline'):
+                self.assertEqual(self.client.post(f'/api/friends/requests/{req.id}/{action}/').status_code, 404)
+        self.assertFalse(Friendship.objects.exclude(status=Friendship.STATUS_PENDING).exists())
+
+    def test_cant_answer_twice(self):
+        req = Friendship.objects.create(from_user=self.other, to_user=self.user, status=Friendship.STATUS_DECLINED)
+        self.assertEqual(self.client.post(f'/api/friends/requests/{req.id}/accept/').status_code, 404)
+
+    def test_friends_list_both_directions_and_sorted(self):
+        self.befriend(self.user, self.other)
+        self.befriend(self.third, self.user)
+        Friendship.objects.create(from_user=self.user, to_user=User.objects.create_user('pending'))
+        names = [f['username'] for f in self.client.get('/api/friends/').json()['results']]
+        self.assertEqual(names, ['alex', 'sam'])
+        self.assertEqual(set(self.client.get('/api/friends/').json()['results'][0]), {'id', 'username'})
+
+    def test_unfriend(self):
+        self.befriend(self.other, self.user)
+        self.assertEqual(self.client.delete(f'/api/friends/{self.other.id}/').status_code, 204)
+        self.assertFalse(Friendship.objects.exists())
+        self.assertEqual(self.client.get('/api/friends/').json()['results'], [])
+        self.assertEqual(self.send('sam').status_code, 201)  # can start over
+
+    def test_unfriend_not_a_friend_is_404(self):
+        Friendship.objects.create(from_user=self.user, to_user=self.other)  # only pending
+        self.assertEqual(self.client.delete(f'/api/friends/{self.other.id}/').status_code, 404)
+        self.assertEqual(self.client.delete('/api/friends/9999/').status_code, 404)
+        self.assertEqual(Friendship.objects.count(), 1)
+
+    def test_needs_login(self):
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get('/api/friends/').status_code, 401)
+        self.assertEqual(self.client.get('/api/friends/requests/').status_code, 401)
+        self.assertEqual(self.send('sam').status_code, 401)
+
+    def test_list_query_counts_are_flat(self):
+        for i in range(3):
+            u = User.objects.create_user(f'f{i}')
+            self.befriend(u, self.user)
+            Friendship.objects.create(from_user=User.objects.create_user(f'r{i}'), to_user=self.user)
+        with self.assertNumQueries(1):
+            self.client.get('/api/friends/')
+        with self.assertNumQueries(1):
+            self.client.get('/api/friends/requests/')

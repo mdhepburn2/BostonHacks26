@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import (Circle, CircleMembership, NearbySearchCache, Place, PlaceCard, PlaceList, SavedPlace,
+from .models import (Circle, CircleMembership, Friendship, NearbySearchCache, Place, PlaceCard, PlaceList, SavedPlace,
                      TextSearchCache)
 
 
@@ -61,3 +61,11 @@ class CircleAdmin(admin.ModelAdmin):
     search_fields = ('name', 'owner__username')
     list_select_related = ('owner',)
     inlines = [CircleMembershipInline]
+
+
+@admin.register(Friendship)
+class FriendshipAdmin(admin.ModelAdmin):
+    list_display = ('from_user', 'to_user', 'status', 'created_at')
+    list_filter = ('status',)
+    search_fields = ('from_user__username', 'to_user__username')
+    list_select_related = ('from_user', 'to_user')

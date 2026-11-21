@@ -3,6 +3,7 @@ import logging
 from django.contrib.auth import authenticate, get_user_model
 from django.db import IntegrityError, transaction
 from django.http import JsonResponse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, parser_classes, permission_classes
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -12,10 +13,10 @@ from rest_framework.response import Response
 from rest_framework.views import exception_handler as drf_exception_handler
 
 from . import permissions
-from .models import Place, SavedPlace
-from .serializers import (IdentifyInputSerializer, ListItemInputSerializer, LoginSerializer,
-                          PlaceListSerializer, RegisterSerializer, SavedPlaceSerializer,
-                          SearchInputSerializer, UserSerializer)
+from .models import Friendship, Place, SavedPlace
+from .serializers import (FriendRequestInputSerializer, FriendRequestSerializer, IdentifyInputSerializer,
+                          ListItemInputSerializer, LoginSerializer, PlaceListSerializer, RegisterSerializer,
+                          SavedPlaceSerializer, SearchInputSerializer, UserSerializer, UserShortSerializer)
 from .services.http import ExternalAPIError
 from .services.identify import identify as identify_photo
 from .services.place_card import get_card
@@ -245,4 +246,103 @@ def place_list_item_detail(request, list_id, saved_id):
         return Response({'detail': "That place isn't in this list."}, status=status.HTTP_404_NOT_FOUND)
     place_list.items.remove(saved)
     place_list.save(update_fields=['updated_at'])
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# --- Friends (Phase 3) ----------------------------------------------------
+
+def _request_response(friendship, status_code=status.HTTP_200_OK):
+    friendship = Friendship.objects.select_related('from_user', 'to_user').get(pk=friendship.pk)
+    return Response(FriendRequestSerializer(friendship).data, status=status_code)
+
+
+def _accept(friendship):
+    """Accept a request and drop any other rows between the pair, so friends share one row."""
+    with transaction.atomic():
+        friendship.status = Friendship.STATUS_ACCEPTED
+        friendship.save(update_fields=['status'])
+        permissions.friendships_between(friendship.from_user_id, friendship.to_user_id) \
+            .exclude(pk=friendship.pk).delete()
+
+
+@api_view(['GET'])
+def friends(request):
+    return Response({'results': UserShortSerializer(permissions.friends_of(request.user), many=True).data})
+
+
+@api_view(['GET', 'POST'])
+def friend_requests(request):
+    if request.method == 'GET':
+        incoming = permissions.incoming_requests(request.user).select_related('from_user', 'to_user')
+        return Response({'results': FriendRequestSerializer(incoming, many=True).data})
+
+    data = FriendRequestInputSerializer(data=request.data)
+    data.is_valid(raise_exception=True)
+    me = request.user
+    target = get_user_model().objects.filter(username__iexact=data.validated_data['username']).first()
+    if target is None:
+        return Response({'detail': 'No one has that username.'}, status=status.HTTP_404_NOT_FOUND)
+    if target.pk == me.pk:
+        return Response({'detail': "You can't send a friend request to yourself."},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    rows = list(permissions.friendships_between(me, target))
+    if any(r.status == Friendship.STATUS_ACCEPTED for r in rows):
+        return Response({'detail': "You're already friends."}, status=status.HTTP_400_BAD_REQUEST)
+
+    theirs = next((r for r in rows if r.from_user_id == target.pk and r.status == Friendship.STATUS_PENDING), None)
+    if theirs is not None:  # they already asked me, so asking back means yes
+        _accept(theirs)
+        return _request_response(theirs)
+
+    mine = next((r for r in rows if r.from_user_id == me.pk), None)
+    if mine is not None and mine.status == Friendship.STATUS_PENDING:
+        return _request_response(mine)
+    if mine is not None:  # declined before; sending again puts it back in their requests
+        mine.status = Friendship.STATUS_PENDING
+        mine.created_at = timezone.now()
+        mine.save(update_fields=['status', 'created_at'])
+        return _request_response(mine, status.HTTP_201_CREATED)
+
+    try:
+        with transaction.atomic():
+            mine = Friendship.objects.create(from_user=me, to_user=target)
+    except IntegrityError:  # a double tap created it in between
+        return _request_response(Friendship.objects.get(from_user=me, to_user=target))
+    return _request_response(mine, status.HTTP_201_CREATED)
+
+
+def _incoming_request(request, request_id):
+    return permissions.incoming_requests(request.user).filter(pk=request_id).first()
+
+
+def _request_not_found():
+    return Response({'detail': 'Friend request not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['POST'])
+def accept_friend_request(request, request_id):
+    friendship = _incoming_request(request, request_id)
+    if friendship is None:
+        return _request_not_found()
+    _accept(friendship)
+    return _request_response(friendship)
+
+
+@api_view(['POST'])
+def decline_friend_request(request, request_id):
+    friendship = _incoming_request(request, request_id)
+    if friendship is None:
+        return _request_not_found()
+    friendship.status = Friendship.STATUS_DECLINED
+    friendship.save(update_fields=['status'])
+    return _request_response(friendship)
+
+
+@api_view(['DELETE'])
+def unfriend(request, user_id):
+    if not permissions.are_friends(request.user, user_id):
+        return Response({'detail': "You aren't friends with that user."}, status=status.HTTP_404_NOT_FOUND)
+    # Clear every row between the pair so either of them can send a fresh request later.
+    permissions.friendships_between(request.user, user_id).delete()
     return Response(status=status.HTTP_204_NO_CONTENT)

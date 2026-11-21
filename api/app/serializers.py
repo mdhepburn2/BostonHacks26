@@ -4,7 +4,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from . import permissions
-from .models import Place, PlaceList, SavedPlace, Visibility
+from .models import Friendship, Place, PlaceList, SavedPlace, Visibility
 
 User = get_user_model()
 
@@ -196,3 +196,30 @@ class ListItemInputSerializer(serializers.Serializer):
         queryset=Place.objects.all(),
         error_messages={'does_not_exist': 'Place not found.', 'incorrect_type': 'place_id must be a number.'},
     )
+
+
+# --- Friends (Phase 3) ----------------------------------------------------
+
+class UserShortSerializer(serializers.ModelSerializer):
+    """A user as other people see them (no email)."""
+
+    class Meta:
+        model = User
+        fields = ['id', 'username']
+
+
+class FriendRequestSerializer(serializers.ModelSerializer):
+    """Friend request shape."""
+
+    from_user = UserShortSerializer(read_only=True)
+    to_user = UserShortSerializer(read_only=True)
+
+    class Meta:
+        model = Friendship
+        fields = ['id', 'from_user', 'to_user', 'status', 'created_at']
+
+
+class FriendRequestInputSerializer(serializers.Serializer):
+    """Body for POST /api/friends/requests/."""
+
+    username = serializers.CharField(max_length=150)
