@@ -164,6 +164,7 @@ MAILERS = {
 GOOGLE_PLACES_KEY = os.environ.get('GOOGLE_PLACES_KEY', '')
 LLM_API_KEY = os.environ.get('LLM_API_KEY', '')
 MBTA_KEY = os.environ.get('MBTA_KEY', '')
+LLM_MODEL = os.environ.get('LLM_MODEL', 'gemini-3.8-flash')
 
 
 # Logging: send app logs (including per-step timings) to the console so they

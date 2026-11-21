@@ -3,6 +3,9 @@ import io
 from django.core.files.uploadedfile import SimpleUploadedFile
 from PIL import Image
 from rest_framework.test import APITestCase
+from unittest import mock as umock
+
+from .models import Place
 
 
 def make_image():
@@ -26,7 +29,20 @@ class HealthTests(APITestCase):
 
 
 class IdentifyTests(APITestCase):
+    """Request validation and response shape. External calls are mocked; flow logic is in IdentifyFlowTests."""
+
     url = '/api/identify/'
+
+    def setUp(self):
+        self.place = Place.objects.create(external_id='g1', source='google', name='Faneuil Hall',
+                                          lat=42.3600, lng=-71.0568)
+        patches = [
+            umock.patch('app.services.identify.candidate_service.get_candidates', return_value=[self.place]),
+            umock.patch('app.services.identify.llm.match_photo', return_value={'ranked': [0], 'confidence': 0.9}),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
 
     def test_returns_contract_shape(self):
         response = self.client.post(
@@ -37,7 +53,7 @@ class IdentifyTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(set(body), {'status', 'place', 'candidates', 'confidence'})
-        self.assertIn(body['status'], {'matched', 'ambiguous', 'not_found'})
+        self.assertEqual(body['status'], 'matched')
         self.assertEqual(set(body['place']), SHORT_PLACE_KEYS)
         for c in body['candidates']:
             self.assertEqual(set(c), SHORT_PLACE_KEYS)
@@ -326,3 +342,138 @@ class HeadingFilterTests(TestCase):
 
     def test_empty_input(self):
         self.assertEqual(geo.filter_by_heading([], self.lat, self.lng, heading=0), [])
+
+
+# --- Vision match + identify flow (step 8) --------------------------------
+
+from .services import identify as identify_service
+from .services import llm
+
+
+class VisionValidationTests(TestCase):
+    def test_converts_to_zero_based_and_dedupes(self):
+        self.assertEqual(llm._validate_vision({'ranked': [2, 2, 1], 'confidence': 0.8}, 3),
+                         {'ranked': [1, 0], 'confidence': 0.8})
+
+    def test_caps_at_three_and_clamps_confidence(self):
+        out = llm._validate_vision({'ranked': [1, 2, 3, 4], 'confidence': 1.5}, 4)
+        self.assertEqual(out, {'ranked': [0, 1, 2], 'confidence': 1.0})
+
+    def test_empty_ranking_forces_zero_confidence(self):
+        self.assertEqual(llm._validate_vision({'ranked': [], 'confidence': 0.9}, 3),
+                         {'ranked': [], 'confidence': 0.0})
+
+    def test_rejects_invented_index(self):
+        for bad in ([0], [4], [True], ['1']):
+            with self.assertRaises(ExternalAPIError):
+                llm._validate_vision({'ranked': bad, 'confidence': 0.9}, 3)
+
+    def test_rejects_wrong_shape(self):
+        for bad in ({}, {'ranked': 1, 'confidence': 0.5}, {'ranked': [1]}, {'ranked': [1], 'confidence': 'high'}):
+            with self.assertRaises(ExternalAPIError):
+                llm._validate_vision(bad, 3)
+
+    def test_missing_key_raises(self):
+        with self.settings(LLM_API_KEY=''):
+            with self.assertRaises(ExternalAPIError):
+                llm.match_photo(b'x', [{'name': 'A', 'kind': 'k', 'distance_m': 1, 'direction': 'north'}], 0, 0)
+
+    def test_unparseable_model_output_raises(self):
+        reply = {'candidates': [{'content': {'parts': [{'text': 'not json'}]}}]}
+        with self.settings(LLM_API_KEY='k'), umock.patch.object(llm, 'request_json', return_value=reply):
+            with self.assertRaises(ExternalAPIError):
+                llm.match_photo(b'x', [{'name': 'A', 'kind': 'k', 'distance_m': 1, 'direction': 'north'}], 0, 0)
+
+    def test_full_call_parses_reply(self):
+        reply = {'candidates': [{'content': {'parts': [{'text': '{"ranked": [1], "confidence": 0.75}'}]}}]}
+        with self.settings(LLM_API_KEY='k'), umock.patch.object(llm, 'request_json', return_value=reply) as req:
+            out = llm.match_photo(b'x', [{'name': 'A', 'kind': 'k', 'distance_m': 1, 'direction': 'north'}], 0, 0)
+        self.assertEqual(out, {'ranked': [0], 'confidence': 0.75})
+        body = req.call_args.kwargs['json']
+        self.assertEqual(body['generationConfig']['responseMimeType'], 'application/json')
+        self.assertIn('1. A', body['contents'][0]['parts'][0]['text'])
+
+
+class PrepareImageTests(TestCase):
+    def test_resizes_longest_side_to_1024(self):
+        buf = io.BytesIO()
+        Image.new('RGB', (4000, 3000), 'blue').save(buf, format='PNG')
+        out = Image.open(io.BytesIO(llm.prepare_image(buf)))
+        self.assertEqual(out.format, 'JPEG')
+        self.assertEqual(out.size, (1024, 768))
+
+    def test_small_images_are_not_upscaled(self):
+        out = Image.open(io.BytesIO(llm.prepare_image(make_image())))
+        self.assertEqual(out.size, (10, 10))
+
+
+@umock.patch.object(identify_service.llm, 'match_photo')
+@umock.patch.object(identify_service.candidate_service, 'get_candidates')
+class IdentifyFlowTests(TestCase):
+    lat, lng = 42.3600, -71.0600
+
+    def setUp(self):
+        def mk(eid, name, lat, lng):
+            return Place.objects.create(external_id=eid, source='google', name=name, lat=lat, lng=lng)
+        self.a = mk('a', 'North A', 42.3610, -71.0600)   # ~111m north
+        self.b = mk('b', 'North B', 42.3620, -71.0600)   # ~222m north
+        self.c = mk('c', 'North C', 42.3630, -71.0600)
+        self.s = mk('s', 'South', 42.3590, -71.0600)     # behind when facing north
+        self.all = [self.a, self.b, self.c, self.s]
+
+    def run_identify(self, heading=0):
+        return identify_service.identify(make_image(), self.lat, self.lng, heading)
+
+    def test_matched(self, get_candidates, match):
+        get_candidates.return_value = self.all
+        match.return_value = {'ranked': [1, 0], 'confidence': 0.9}
+        out = self.run_identify()
+        self.assertEqual(out['status'], 'matched')
+        self.assertEqual(out['place']['id'], self.b.id)
+        self.assertEqual([c['id'] for c in out['candidates']], [self.b.id, self.a.id])
+        self.assertEqual(out['confidence'], 0.9)
+
+    def test_llm_only_sees_heading_filtered_candidates(self, get_candidates, match):
+        get_candidates.return_value = self.all
+        match.return_value = {'ranked': [0], 'confidence': 0.9}
+        self.run_identify(heading=0)
+        sent = match.call_args.args[1]
+        self.assertEqual([c['name'] for c in sent], ['North A', 'North B', 'North C'])
+        self.assertEqual(sent[0]['direction'], 'north')
+
+    def test_ambiguous_returns_top_three(self, get_candidates, match):
+        get_candidates.return_value = self.all
+        match.return_value = {'ranked': [2], 'confidence': 0.5}
+        out = self.run_identify()
+        self.assertEqual(out['status'], 'ambiguous')
+        self.assertEqual(out['place']['id'], self.c.id)
+        self.assertEqual([c['id'] for c in out['candidates']], [self.c.id, self.a.id, self.b.id])
+
+    def test_low_confidence_is_not_found(self, get_candidates, match):
+        get_candidates.return_value = self.all
+        match.return_value = {'ranked': [0], 'confidence': 0.2}
+        out = self.run_identify()
+        self.assertEqual(out['status'], 'not_found')
+        self.assertIsNone(out['place'])
+        self.assertEqual(len(out['candidates']), 3)
+
+    def test_boundaries(self, get_candidates, match):
+        get_candidates.return_value = self.all
+        for conf, status in ((0.7, 'matched'), (0.4, 'ambiguous'), (0.39, 'not_found')):
+            match.return_value = {'ranked': [0], 'confidence': conf}
+            self.assertEqual(self.run_identify()['status'], status, conf)
+
+    def test_vision_failure_falls_back_to_ambiguous(self, get_candidates, match):
+        get_candidates.return_value = self.all
+        match.side_effect = ExternalAPIError('down')
+        out = self.run_identify()
+        self.assertEqual(out['status'], 'ambiguous')
+        self.assertIsNone(out['place'])
+        self.assertEqual([c['id'] for c in out['candidates']], [self.a.id, self.b.id, self.c.id])
+        self.assertEqual(out['confidence'], 0.0)
+
+    def test_no_candidates_skips_llm(self, get_candidates, match):
+        get_candidates.return_value = []
+        out = self.run_identify()
+        self.assertEqual(out, {'status': 'not_found', 'place': None, 'candidates': [], 'confidence': 0.0})
+        match.assert_not_called()

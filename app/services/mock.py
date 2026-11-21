@@ -1,11 +1,9 @@
 """Hardcoded Boston places for the Phase 1 mock endpoints.
 
 These let the frontend build against the real response shapes before the
-Google / Wikipedia / LLM services exist. Delete this module once steps 8-10
-replace the mock views.
+Google / Wikipedia / LLM services exist. Delete this module once steps 9-10
+replace the remaining mock views.
 """
-
-import math
 
 MOCK_PLACES = [
     {
@@ -127,31 +125,6 @@ MOCK_PLACES = [
 ]
 
 _BY_ID = {p['id']: p for p in MOCK_PLACES}
-
-
-def _distance_m(lat1, lng1, lat2, lng2):
-    """Haversine distance in meters."""
-    r = 6_371_000
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp = p2 - p1
-    dl = math.radians(lng2 - lng1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * r * math.asin(math.sqrt(a))
-
-
-def _short(place):
-    return {'id': place['id'], 'name': place['name'], 'lat': place['lat'], 'lng': place['lng']}
-
-
-def identify(lat, lng):
-    """Pretend the vision match picked the closest mock place."""
-    ranked = sorted(MOCK_PLACES, key=lambda p: _distance_m(lat, lng, p['lat'], p['lng']))
-    return {
-        'status': 'matched',
-        'place': _short(ranked[0]),
-        'candidates': [_short(p) for p in ranked[:3]],
-        'confidence': 0.85,
-    }
 
 
 def search(query):

@@ -6,6 +6,7 @@ from rest_framework.response import Response
 
 from .serializers import IdentifyInputSerializer, SearchInputSerializer
 from .services import mock
+from .services.identify import identify as identify_photo
 
 
 @api_view(['GET'])
@@ -14,9 +15,9 @@ def health(request):
     return Response({'status': 'ok'})
 
 
-# Phase 1 place endpoints. These return mock data (app/services/mock.py) with the
-# real response shapes so the frontend can build against them. Steps 8-10 swap
-# the mock calls for the real services.
+# Phase 1 place endpoints. Search and the place card still return mock data
+# (app/services/mock.py) with the real response shapes; steps 9-10 swap them
+# for the real services.
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -24,7 +25,8 @@ def health(request):
 def identify(request):
     data = IdentifyInputSerializer(data=request.data)
     data.is_valid(raise_exception=True)
-    return Response(mock.identify(data.validated_data['lat'], data.validated_data['lng']))
+    v = data.validated_data
+    return Response(identify_photo(v['image'], v['lat'], v['lng'], v.get('heading')))
 
 
 @api_view(['GET'])
