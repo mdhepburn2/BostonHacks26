@@ -1,26 +1,31 @@
 /**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://unistyl.es/), etc.
+ * Colors, fonts and spacing for the app, in light and dark mode. Use these instead of
+ * hardcoded values.
  */
 
 import '@/global.css';
 
 import { Platform } from 'react-native';
 
+// Warm off-whites and a brick red borrowed from the Freedom Trail line.
 export const Colors = {
   light: {
-    text: '#000000',
-    background: '#ffffff',
-    backgroundElement: '#F0F0F3',
-    backgroundSelected: '#E0E1E6',
-    textSecondary: '#60646C',
+    text: '#1B1A17',
+    background: '#FAF7F2',
+    backgroundElement: '#F0EBE3',
+    backgroundSelected: '#E4DCD0',
+    textSecondary: '#6B655C',
+    tint: '#B5332E',
+    onTint: '#FFFFFF',
   },
   dark: {
-    text: '#ffffff',
-    background: '#000000',
-    backgroundElement: '#212225',
-    backgroundSelected: '#2E3135',
-    textSecondary: '#B0B4BA',
+    text: '#F5F1EA',
+    background: '#121110',
+    backgroundElement: '#1F1D1A',
+    backgroundSelected: '#2B2824',
+    textSecondary: '#A8A196',
+    tint: '#E0574F',
+    onTint: '#FFFFFF',
   },
 } as const;
 
