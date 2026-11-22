@@ -7,7 +7,8 @@ import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 type ScreenProps = {
-  title: string;
+  /** Large title at the top. Leave out when the stack header already names the screen. */
+  title?: string;
   subtitle?: string;
   children?: ReactNode;
 };
@@ -31,10 +32,12 @@ export function Screen({ title, subtitle, children }: ScreenProps) {
       style={{ backgroundColor: theme.background }}
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={[styles.content, padding]}>
-      <View style={styles.header}>
-        <ThemedText type="title">{title}</ThemedText>
-        {subtitle ? <ThemedText themeColor="textSecondary">{subtitle}</ThemedText> : null}
-      </View>
+      {title ? (
+        <View style={styles.header}>
+          <ThemedText type="title">{title}</ThemedText>
+          {subtitle ? <ThemedText themeColor="textSecondary">{subtitle}</ThemedText> : null}
+        </View>
+      ) : null}
       {children}
     </ScrollView>
   );

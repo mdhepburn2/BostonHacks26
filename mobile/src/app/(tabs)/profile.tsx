@@ -18,8 +18,8 @@ export default function ProfileScreen() {
   return (
     <Screen title="Profile">
       <View style={styles.identity}>
-        <View style={[styles.avatar, { backgroundColor: theme.tint }]}>
-          <ThemedText type="subtitle" style={{ color: theme.onTint }}>
+        <View style={[styles.avatar, { backgroundColor: theme.blue }]}>
+          <ThemedText type="subtitle" style={{ color: theme.onBlue }}>
             ?
           </ThemedText>
         </View>
@@ -43,6 +43,7 @@ export default function ProfileScreen() {
       </View>
 
       <EmptyState
+        accent="green"
         icon={{ ios: 'person.crop.circle', android: 'account_circle', web: 'account_circle' }}
         title="Log in to see your profile"
         body="This is what other people see when they look you up: your stats and the places you've shared."

@@ -1,19 +1,17 @@
 import { useLocalSearchParams } from 'expo-router';
 
-import { EmptyState } from '@/components/empty-state';
+import { samplePlace } from '@/api/mock';
+import { PlaceCard } from '@/components/place-card';
 import { Screen } from '@/components/screen';
 
-// Placeholder. Step 4 loads GET /api/places/<id>/ and shows the full card.
+// MOCK: shows sample data until step 4 loads GET /api/places/<id>/ here.
 export default function PlaceScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const place = samplePlace(Number(id) || 1);
 
   return (
-    <Screen title={`Place #${id}`}>
-      <EmptyState
-        icon={{ ios: 'building.columns', android: 'account_balance', web: 'account_balance' }}
-        title="Place card coming soon"
-        body="Name, bio, rating, hours, nearest T stop and friends who want to go."
-      />
+    <Screen>
+      <PlaceCard place={place} />
     </Screen>
   );
 }

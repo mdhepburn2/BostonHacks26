@@ -3,7 +3,7 @@ import { type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
-import { Spacing } from '@/constants/theme';
+import { type Accent, OnAccent, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 type EmptyStateProps = {
@@ -11,15 +11,23 @@ type EmptyStateProps = {
   title: string;
   body?: string;
   action?: ReactNode;
+  /** Puts the icon on a coloured sign tile instead of plain grey. */
+  accent?: Accent;
 };
 
 /** Card shown when a section has nothing in it yet. */
-export function EmptyState({ icon, title, body, action }: EmptyStateProps) {
+export function EmptyState({ icon, title, body, action, accent }: EmptyStateProps) {
   const theme = useTheme();
 
   return (
     <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
-      <SymbolView name={icon} size={28} tintColor={theme.textSecondary} />
+      {accent ? (
+        <View style={[styles.iconTile, { backgroundColor: theme[accent] }]}>
+          <SymbolView name={icon} size={24} tintColor={theme[OnAccent[accent]]} />
+        </View>
+      ) : (
+        <SymbolView name={icon} size={28} tintColor={theme.textSecondary} />
+      )}
       <ThemedText type="smallBold" style={styles.center}>
         {title}
       </ThemedText>
@@ -41,6 +49,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.four,
     borderRadius: Spacing.four,
     borderCurve: 'continuous',
+  },
+  iconTile: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    borderCurve: 'continuous',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.one,
   },
   center: {
     textAlign: 'center',

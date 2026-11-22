@@ -24,6 +24,12 @@ export function ScanButton({ variant = 'hero' }: ScanButtonProps) {
       style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>
       <View
         style={[styles.base, hero ? styles.hero : styles.compact, { backgroundColor: theme.tint }]}>
+        {hero ? (
+          <>
+            <View style={[styles.sun, { backgroundColor: theme.yellow }]} />
+            <View style={styles.ring} />
+          </>
+        ) : null}
         <View style={[styles.iconWrap, hero && styles.iconWrapHero]}>
           <SymbolView
             name={{ ios: 'camera.viewfinder', android: 'photo_camera', web: 'photo_camera' }}
@@ -57,6 +63,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     borderCurve: 'continuous',
+    overflow: 'hidden',
+  },
+  // Decorative shapes peeking in from the corners of the hero card.
+  sun: {
+    position: 'absolute',
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    right: -48,
+    bottom: -64,
+  },
+  ring: {
+    position: 'absolute',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 3,
+    borderColor: 'rgba(255,255,255,0.3)',
+    top: -22,
+    left: -18,
   },
   hero: {
     gap: Spacing.three,
