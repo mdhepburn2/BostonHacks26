@@ -109,7 +109,7 @@ All in `app/models.py`. Use Django's built-in `User` model for accounts.
 - **IdentifyLog** (optional): photo, coordinates, heading, result JSON, `created_at`. For debugging and demos.
 
 ### Saving and tags (Phase 2)
-- **SavedPlace:** FK `user`, FK `place`, `visited` (bool), `visited_at` (nullable date, set by the user to whenever they went), `note` (optional text), `visibility`, FK `circle` (nullable, required when visibility is `circle`), many-to-many to `Tag` (`tags`), `created_at`. Unique on (user, place). This is the single source of truth for whether a user has visited a place. A user's saved places are their one and only list ("My saved locations"); there are no other lists.
+- **SavedPlace:** FK `user`, FK `place`, `visited` (bool), `visited_at` (nullable date, set by the user to whenever they went), `marked_visited_at` (nullable datetime, set by the server when "visited" is ticked and cleared when unticked; drives the friends feed order), `note` (optional text), `visibility`, FK `circle` (nullable, required when visibility is `circle`), many-to-many to `Tag` (`tags`), `created_at`. Unique on (user, place). This is the single source of truth for whether a user has visited a place. A user's saved places are their one and only list ("My saved locations"); there are no other lists.
 - **Tag:** FK `owner`, `name`, `created_at`. Names are unique per user ignoring case. A saved place can only carry its owner's tags. Tags are labels only and never change who can see a saved place.
 
 ### Social (Phase 3)
@@ -208,7 +208,8 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 - `GET /api/me/` returns the `user` object.
 
 **Saving rules:**
-- `GET /api/saved/` is "My saved locations" and returns `{"results": [...]}`, newest first. Filters: `?visited=true|false` and `?tag=<tag id>`.
+- `GET /api/saved/` is "My saved locations" and returns `{"results": [...]}`, newest first. Filters, all optional and combinable: `?visited=true|false`, `?tag=<tag id>`, `?q=<part of the place name>`, `?visibility=private|friends|circle|public`, `?price_range=$,$$` (any of), `?type=<Google place type, e.g. restaurant, museum, park>`. Sort: `?sort=saved` (newest saved, default), `visited` (latest visit first, unvisited last), `name` (A to Z). Unknown or blank values are ignored.
+- `place.price_range` is `"$"` to `"$$$$"` or null. It's only known once the place's card has been opened, since that's when details are fetched. `place.types` is Google's list of types (empty for Wikipedia places).
 - `POST /api/saved/` body: `place_id` plus any of `visited`, `visited_at`, `note`, `visibility`, `circle_id`, `tag_ids`. Returns 201, or 200 with the existing saved place (unchanged) if it was already saved. Use PATCH to edit it.
 - Sending `visited_at` marks the place visited. `visited: true` with no date uses today. `visited: false` clears the date. Future dates are rejected.
 - `visibility: "circle"` needs a `circle_id` for a circle the user belongs to. Any other visibility clears `circle_id`.
@@ -226,7 +227,7 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 ```json
 {
   "id": 0,
-  "place": { "id": 0, "name": "", "lat": 0, "lng": 0 },
+  "place": { "id": 0, "name": "", "lat": 0, "lng": 0, "price_range": "$$", "types": [] },
   "visited": false,
   "visited_at": null,
   "note": "",
@@ -254,6 +255,9 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 | POST | `/api/friends/requests/<id>/decline/` | Decline |
 | DELETE | `/api/friends/<user_id>/` | Unfriend |
 | GET | `/api/users/<id>/saved/` | Their saved places that I'm allowed to see |
+| GET | `/api/users/search/?q=` | Find people by username |
+| GET | `/api/users/<id>/` | Someone's profile (or mine) with counts |
+| GET | `/api/feed/` | Home friends feed: friends' saved places I'm allowed to see, newest first |
 | POST / DELETE | `/api/places/<id>/interest/` | Mark / unmark interested. Optional body: `via_saved_place_id` |
 | GET / POST | `/api/circles/` | My circles / create one |
 | GET / PATCH / DELETE | `/api/circles/<id>/` | View, edit, delete (owner only for edit/delete) |
@@ -273,10 +277,21 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 - Friend checks (`friends_of`, `are_friends`, `friend_ids`) live in `app/permissions.py`.
 
 **Other users' saved places:**
-- `GET /api/users/<id>/saved/` returns `{"results": [<saved place shape>]}`, the same shape as `/api/saved/`, with the same `?visited=` and `?tag=` filters. It shows only the saved places whose own visibility lets me see them, tags included.
+- `GET /api/users/<id>/saved/` returns `{"results": [<saved place shape>]}`, the same shape as `/api/saved/`, with the same filters and sorts. It shows only the saved places whose own visibility lets me see them, tags included.
 - 404 for an unknown user, and an empty list (not 403) when nothing is visible.
 - Visibility is checked live: unfriending or leaving a circle hides things straight away. A `circle` item whose circle was deleted is owner-only.
 - Use `visible_saved_places(viewer)` from `app/permissions.py` for every read of someone else's saved places. Edits stay owner-only (`own_saved_places`, `own_tags`).
+
+**People search and profiles:**
+- `GET /api/users/search/?q=` matches part of a username, ignoring case. Names starting with `q` come first, then A to Z, at most 20. Never includes me; a blank `q` returns an empty list. Each result: `{"id": 0, "username": "", "friendship": ""}`.
+- `GET /api/users/<id>/` returns `{"id": 0, "username": "", "friendship": "", "counts": {"friends": 0, "saved": 0, "visited": 0}}`, 404 for an unknown user. No email.
+- `friendship` is from my side: `self`, `friends`, `request_sent`, `request_received` or `none`. A request they declined shows as `none` so declines stay private (`friendship_statuses` in `app/permissions.py`).
+- `saved` and `visited` count only the saved places I'm allowed to see (`visible_saved_places`), so they match what their list shows me. On my own profile they count everything.
+
+**Friends feed:**
+- `GET /api/feed/` returns `{"results": [{"friend": {"id": 0, "username": ""}, "saved": <saved place shape>, "feed_at": ""}]}`. Optional `?limit=` (default 50, max 100).
+- Accepted friends only, never my own saves and never public saves from non-friends. Each item still has to pass its own visibility (`friends_feed(viewer)` in `app/permissions.py`, built on `visible_saved_places`).
+- Ordered by `feed_at` newest first: the later of when it was saved and when the friend ticked "visited" (`marked_visited_at`). So checking off an old save bumps it back to the top, even if the `visited_at` date they enter is in the past. Editing an already-visited save (note, tags, date) doesn't bump it again.
 
 **Place interest:**
 - `POST /api/places/<id>/interest/` marks me interested. Optional body: `via_saved_place_id`, a friend's saved place for this same place that I'm allowed to see (`visible_saved_places`); my own, a hidden one, an unknown id or one for a different place is 400. Returns 201, or 200 with the existing interest (unchanged) if I was already interested.
@@ -415,3 +430,5 @@ Social rules:
 19. Place interest + live `friends_interested` count on the card
 20. Circles and membership
 21. Activities, responses and the activity feed
+22. Home friends feed (`/api/feed/`)
+23. People search, profiles with counts, and saved list filters/sorts

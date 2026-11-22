@@ -149,6 +149,8 @@ class SavedPlace(models.Model):
     place = models.ForeignKey(Place, on_delete=models.CASCADE, related_name='saves')
     visited = models.BooleanField(default=False)
     visited_at = models.DateField(null=True, blank=True)  # whenever the user says they went
+    # When they ticked "visited" (not when they went). Bumps the place back to the top of friends' feeds.
+    marked_visited_at = models.DateTimeField(null=True, blank=True)
     note = models.TextField(blank=True)
     visibility = models.CharField(max_length=10, choices=Visibility.choices, default=Visibility.PRIVATE)
     # Required when visibility is "circle". If the circle is deleted this becomes

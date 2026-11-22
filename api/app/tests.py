@@ -1024,7 +1024,7 @@ class SavedPlaceTests(LoggedInTestCase):
         self.assertEqual(response.status_code, 201)
         body = response.json()
         self.assertEqual(set(body), SAVED_KEYS)
-        self.assertEqual(set(body['place']), SHORT_PLACE_KEYS)
+        self.assertEqual(set(body['place']), SHORT_PLACE_KEYS | {'price_range', 'types'})
         self.assertEqual(body['visibility'], 'private')
         self.assertFalse(body['visited'])
         self.assertIsNone(body['visited_at'])
@@ -2015,3 +2015,251 @@ class ActivityTests(LoggedInTestCase):
         self.assertEqual(item['my_response'], 'interested')
         self.as_user(self.other)
         self.assertEqual(self.client.get('/api/activities/').json()['results'][0]['my_response'], 'going')
+
+
+# --- Friends feed ----------------------------------------------------------
+
+class FeedTests(LoggedInTestCase):
+    """"matt" (self.user) is logged in and friends with "sam" (self.other)."""
+
+    def setUp(self):
+        super().setUp()
+        Friendship.objects.create(from_user=self.other, to_user=self.user, status=Friendship.STATUS_ACCEPTED)
+        self.stranger = User.objects.create_user('stranger')
+        self.place3 = Place.objects.create(external_id='g3', source='google', name='Aquarium', lat=42.359, lng=-71.05)
+
+    def save_as(self, user, place, visibility='friends', ago_hours=0, **extra):
+        saved = SavedPlace.objects.create(user=user, place=place, visibility=visibility, **extra)
+        SavedPlace.objects.filter(pk=saved.pk).update(created_at=timezone.now() - timedelta(hours=ago_hours))
+        return saved
+
+    def feed_ids(self):
+        response = self.client.get('/api/feed/')
+        self.assertEqual(response.status_code, 200)
+        return [item['saved']['id'] for item in response.json()['results']]
+
+    def test_shape(self):
+        saved = self.save_as(self.other, self.place)
+        item = self.client.get('/api/feed/').json()['results'][0]
+        self.assertEqual(set(item), {'friend', 'saved', 'feed_at'})
+        self.assertEqual(item['friend'], {'id': self.other.id, 'username': 'sam'})
+        self.assertEqual(set(item['saved']), SAVED_KEYS)
+        self.assertEqual(item['saved']['id'], saved.id)
+        self.assertEqual(item['saved']['place']['name'], 'Faneuil Hall')
+
+    def test_friends_only_and_never_mine(self):
+        mine = self.save_as(self.user, self.place, 'public')
+        stranger_public = self.save_as(self.stranger, self.place, 'public')
+        friend = self.save_as(self.other, self.place)
+        self.assertEqual(self.feed_ids(), [friend.id])
+        self.assertNotIn(mine.id, self.feed_ids())
+        self.assertNotIn(stranger_public.id, self.feed_ids())
+
+    def test_respects_visibility(self):
+        private = self.save_as(self.other, self.place, 'private')
+        public = self.save_as(self.other, self.place2, 'public')
+        other_circle = self.save_as(self.other, self.place3, 'circle', circle=self.make_circle(self.other))
+        self.assertEqual(self.feed_ids(), [public.id])
+        self.assertNotIn(private.id, self.feed_ids())
+        self.assertNotIn(other_circle.id, self.feed_ids())
+
+    def test_circle_item_shows_for_members(self):
+        saved = self.save_as(self.other, self.place, 'circle', circle=self.make_circle(self.other, self.user))
+        self.assertEqual(self.feed_ids(), [saved.id])
+
+    def test_pending_friend_and_unfriend_hide_items(self):
+        pending = User.objects.create_user('pending')
+        Friendship.objects.create(from_user=pending, to_user=self.user)
+        self.save_as(pending, self.place)
+        friend = self.save_as(self.other, self.place)
+        self.assertEqual(self.feed_ids(), [friend.id])
+        self.client.delete(f'/api/friends/{self.other.id}/')
+        self.assertEqual(self.feed_ids(), [])
+
+    def test_newest_first(self):
+        old = self.save_as(self.other, self.place, ago_hours=5)
+        new = self.save_as(self.other, self.place2, ago_hours=1)
+        self.assertEqual(self.feed_ids(), [new.id, old.id])
+
+    def test_marking_visited_bumps_to_top_even_with_old_visit_date(self):
+        old = self.save_as(self.other, self.place, ago_hours=5)
+        new = self.save_as(self.other, self.place2, ago_hours=1)
+        self.as_other()
+        last_year = (timezone.localdate() - timedelta(days=365)).isoformat()
+        self.assertEqual(self.client.patch(f'/api/saved/{old.id}/', {'visited_at': last_year}).status_code, 200)
+        self.client.force_authenticate(self.user)
+        self.assertEqual(self.feed_ids(), [old.id, new.id])
+
+    def test_editing_an_already_visited_place_does_not_bump_again(self):
+        old = self.save_as(self.other, self.place, ago_hours=5)
+        self.as_other()
+        self.client.patch(f'/api/saved/{old.id}/', {'visited': True})
+        marked = SavedPlace.objects.get(pk=old.id).marked_visited_at
+        self.assertIsNotNone(marked)
+        self.client.patch(f'/api/saved/{old.id}/', {'note': 'loved it'})
+        self.assertEqual(SavedPlace.objects.get(pk=old.id).marked_visited_at, marked)
+        self.client.patch(f'/api/saved/{old.id}/', {'visited': False})
+        self.assertIsNone(SavedPlace.objects.get(pk=old.id).marked_visited_at)
+
+    def test_saving_as_visited_sets_marked_time(self):
+        self.as_other()
+        response = self.client.post('/api/saved/', {'place_id': self.place.id, 'visited': True,
+                                                     'visibility': 'friends'})
+        self.assertEqual(response.status_code, 201)
+        self.assertIsNotNone(SavedPlace.objects.get(pk=response.json()['id']).marked_visited_at)
+
+    def test_limit(self):
+        for i, place in enumerate([self.place, self.place2, self.place3]):
+            self.save_as(self.other, place, ago_hours=i)
+        self.assertEqual(len(self.client.get('/api/feed/?limit=2').json()['results']), 2)
+        self.assertEqual(len(self.client.get('/api/feed/?limit=nope').json()['results']), 3)
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get('/api/feed/').status_code, 401)
+
+    def as_other(self):
+        self.client.force_authenticate(self.other)
+
+
+# --- People search and profiles ---------------------------------------------
+
+class UserSearchTests(LoggedInTestCase):
+    """"matt" (self.user) is logged in; "sam" (self.other) exists."""
+
+    def search(self, q):
+        response = self.client.get('/api/users/search/', {'q': q})
+        self.assertEqual(response.status_code, 200)
+        return response.json()['results']
+
+    def test_finds_by_part_of_username_ignoring_case_and_never_me(self):
+        User.objects.create_user('samantha')
+        User.objects.create_user('isam')
+        self.assertEqual([u['username'] for u in self.search('SAM')], ['sam', 'samantha', 'isam'])
+        self.assertEqual(self.search('matt'), [])
+
+    def test_shape_and_no_email(self):
+        result = self.search('sam')[0]
+        self.assertEqual(result, {'id': self.other.id, 'username': 'sam', 'friendship': 'none'})
+
+    def test_blank_query_returns_nothing(self):
+        self.assertEqual(self.search('  '), [])
+        self.assertEqual(self.client.get('/api/users/search/').json(), {'results': []})
+
+    def test_friendship_status(self):
+        sent = User.objects.create_user('sent_to')
+        received = User.objects.create_user('received_from')
+        declined = User.objects.create_user('declined_me')
+        Friendship.objects.create(from_user=self.user, to_user=self.other, status=Friendship.STATUS_ACCEPTED)
+        Friendship.objects.create(from_user=self.user, to_user=sent)
+        Friendship.objects.create(from_user=received, to_user=self.user)
+        Friendship.objects.create(from_user=self.user, to_user=declined, status=Friendship.STATUS_DECLINED)
+        statuses = {u['username']: u['friendship'] for u in self.search('e') + self.search('sam')}
+        self.assertEqual(statuses, {'sam': 'friends', 'sent_to': 'request_sent',
+                                    'received_from': 'request_received', 'declined_me': 'none'})
+
+    def test_limit(self):
+        for i in range(25):
+            User.objects.create_user(f'walker{i}')
+        self.assertEqual(len(self.search('walker')), 20)
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get('/api/users/search/', {'q': 'sam'}).status_code, 401)
+
+
+class UserProfileTests(LoggedInTestCase):
+    def setUp(self):
+        super().setUp()
+        self.place3 = Place.objects.create(external_id='g3', source='google', name='Aquarium', lat=42.359, lng=-71.05)
+
+    def profile(self, user):
+        response = self.client.get(f'/api/users/{user.id}/')
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def test_counts_only_what_i_can_see(self):
+        Friendship.objects.create(from_user=self.user, to_user=self.other, status=Friendship.STATUS_ACCEPTED)
+        SavedPlace.objects.create(user=self.other, place=self.place, visibility='friends', visited=True)
+        SavedPlace.objects.create(user=self.other, place=self.place2, visibility='private', visited=True)
+        SavedPlace.objects.create(user=self.other, place=self.place3, visibility='public')
+        self.assertEqual(self.profile(self.other), {
+            'id': self.other.id, 'username': 'sam', 'friendship': 'friends',
+            'counts': {'friends': 1, 'saved': 2, 'visited': 1},
+        })
+        # Sam sees all of their own, including the private one.
+        self.client.force_authenticate(self.other)
+        self.assertEqual(self.profile(self.other)['counts'], {'friends': 1, 'saved': 3, 'visited': 2})
+        self.assertEqual(self.profile(self.other)['friendship'], 'self')
+
+    def test_stranger_sees_public_only(self):
+        SavedPlace.objects.create(user=self.other, place=self.place, visibility='friends')
+        SavedPlace.objects.create(user=self.other, place=self.place2, visibility='public', visited=True)
+        data = self.profile(self.other)
+        self.assertEqual(data['friendship'], 'none')
+        self.assertEqual(data['counts'], {'friends': 0, 'saved': 1, 'visited': 1})
+        self.assertNotIn('email', data)
+
+    def test_unknown_user_404(self):
+        self.assertEqual(self.client.get('/api/users/99999/').status_code, 404)
+
+
+# --- Saved list filters and sorting ------------------------------------------
+
+class SavedFilterTests(LoggedInTestCase):
+    def setUp(self):
+        super().setUp()
+        Place.objects.filter(pk=self.place.pk).update(price_level='PRICE_LEVEL_MODERATE',
+                                                      types=['restaurant', 'food'])
+        Place.objects.filter(pk=self.place2.pk).update(types=['park'])
+        self.place3 = Place.objects.create(external_id='g3', source='google', name='aquarium', lat=42.359,
+                                           lng=-71.05, price_level='PRICE_LEVEL_EXPENSIVE',
+                                           types=['aquarium', 'tourist_attraction'])
+        today = timezone.localdate()
+        self.hall = SavedPlace.objects.create(user=self.user, place=self.place, visibility='friends', visited=True,
+                                              visited_at=today - timedelta(days=10))
+        self.common = SavedPlace.objects.create(user=self.user, place=self.place2, visibility='private')
+        self.aqua = SavedPlace.objects.create(user=self.user, place=self.place3, visibility='public', visited=True,
+                                              visited_at=today - timedelta(days=1))
+
+    def ids(self, **params):
+        response = self.client.get('/api/saved/', params)
+        self.assertEqual(response.status_code, 200)
+        return [item['id'] for item in response.json()['results']]
+
+    def test_place_has_price_range_and_types(self):
+        item = next(i for i in self.client.get('/api/saved/').json()['results'] if i['id'] == self.hall.id)
+        self.assertEqual(item['place'], {'id': self.place.id, 'name': 'Faneuil Hall', 'lat': 42.36, 'lng': -71.056,
+                                         'price_range': '$$', 'types': ['restaurant', 'food']})
+
+    def test_name_search(self):
+        self.assertEqual(self.ids(q='  common '), [self.common.id])
+
+    def test_price_range(self):
+        self.assertEqual(self.ids(price_range='$$'), [self.hall.id])
+        self.assertEqual(set(self.ids(price_range='$$,$$$')), {self.hall.id, self.aqua.id})
+        self.assertEqual(len(self.ids(price_range='cheap')), 3)  # unknown values are ignored
+
+    def test_type(self):
+        self.assertEqual(self.ids(type='park'), [self.common.id])
+        self.assertEqual(self.ids(type='Restaurant'), [self.hall.id])
+        self.assertEqual(self.ids(type='rest'), [])  # whole types only
+
+    def test_visibility(self):
+        self.assertEqual(self.ids(visibility='private'), [self.common.id])
+        self.assertEqual(len(self.ids(visibility='everyone')), 3)
+
+    def test_sorts(self):
+        self.assertEqual(self.ids(), [self.aqua.id, self.common.id, self.hall.id])
+        self.assertEqual(self.ids(sort='visited'), [self.aqua.id, self.hall.id, self.common.id])
+        self.assertEqual(self.ids(sort='name'), [self.aqua.id, self.common.id, self.hall.id])
+        SavedPlace.objects.filter(pk=self.aqua.pk).update(created_at=timezone.now() - timedelta(days=30))
+        self.assertEqual(self.ids(sort='name'), [self.aqua.id, self.common.id, self.hall.id])
+        self.assertEqual(self.ids(), [self.common.id, self.hall.id, self.aqua.id])
+
+    def test_filters_combine_and_work_on_friends_list(self):
+        self.assertEqual(self.ids(visited='true', price_range='$$$'), [self.aqua.id])
+        Friendship.objects.create(from_user=self.other, to_user=self.user, status=Friendship.STATUS_ACCEPTED)
+        self.client.force_authenticate(self.other)
+        response = self.client.get(f'/api/users/{self.user.id}/saved/', {'type': 'restaurant'})
+        self.assertEqual([i['id'] for i in response.json()['results']], [self.hall.id])

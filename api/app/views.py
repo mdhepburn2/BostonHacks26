@@ -3,6 +3,7 @@ import logging
 from django.contrib.auth import authenticate, get_user_model
 from django.db import IntegrityError, transaction
 from django.db.models import Case, Count, F, OuterRef, Q, Subquery, Value, When
+from django.db.models.functions import Coalesce, Greatest, Lower
 from django.http import JsonResponse
 from django.utils import timezone
 from rest_framework import status
@@ -14,12 +15,13 @@ from rest_framework.response import Response
 from rest_framework.views import exception_handler as drf_exception_handler
 
 from . import permissions
-from .models import ActivityResponse, CircleMembership, Friendship, Place, PlaceInterest
+from .models import ActivityResponse, CircleMembership, Friendship, Place, PlaceInterest, Visibility
 from .serializers import (ActivityResponseInputSerializer, ActivitySerializer, CircleMemberInputSerializer,
-                          CircleSerializer, FriendRequestInputSerializer, FriendRequestSerializer,
+                          CircleSerializer, FeedItemSerializer, FriendRequestInputSerializer, FriendRequestSerializer,
                           IdentifyInputSerializer, LoginSerializer, PlaceInterestInputSerializer,
                           RegisterSerializer, SavedPlaceSerializer, SearchInputSerializer, TagSerializer,
-                          UserSerializer, UserShortSerializer)
+                          UserSearchResultSerializer, UserSerializer, UserShortSerializer)
+from .services.google_places import PRICE_RANGES
 from .services.http import ExternalAPIError
 from .services.identify import identify as identify_photo
 from .services.place_card import get_card
@@ -139,14 +141,44 @@ def me(request):
 
 # --- Saved places (Phase 2) -----------------------------------------------
 
+PRICE_LEVELS_BY_RANGE = {}
+for _level, _range in PRICE_RANGES.items():
+    PRICE_LEVELS_BY_RANGE.setdefault(_range, []).append(_level)
+
+SAVED_SORTS = {
+    'saved': ['-created_at', '-id'],                                     # newest saved first (default)
+    'visited': [F('visited_at').desc(nulls_last=True), '-created_at', '-id'],  # most recent visit first
+    'name': [Lower('place__name'), 'id'],                                # A to Z
+}
+
+
 def _saved_list(saved, params):
-    """Shared by my saved places and someone else's: ?visited=true|false and ?tag=<id> filters."""
+    """Shared by my saved places and someone else's.
+
+    Filters: ?visited=true|false, ?tag=<id>, ?q=<name>, ?visibility=<value>,
+    ?price_range=$,$$ (any of), ?type=<google type>. Sort: ?sort=saved|visited|name.
+    Unknown or blank values are ignored.
+    """
     visited = params.get('visited')
     if visited in ('true', 'false'):
         saved = saved.filter(visited=visited == 'true')
     tag = params.get('tag')
     if tag is not None and tag.isdigit():
         saved = saved.filter(tags=tag)
+    q = ' '.join(params.get('q', '').split())
+    if q:
+        saved = saved.filter(place__name__icontains=q)
+    visibility = params.get('visibility')
+    if visibility in Visibility.values:
+        saved = saved.filter(visibility=visibility)
+    ranges = [r for r in params.get('price_range', '').split(',') if r in PRICE_LEVELS_BY_RANGE]
+    if ranges:
+        saved = saved.filter(place__price_level__in=[lvl for r in ranges for lvl in PRICE_LEVELS_BY_RANGE[r]])
+    place_type = params.get('type', '').strip().lower()
+    if place_type.replace('_', '').isalnum():
+        # Matches the quoted type inside the stored JSON list; works on SQLite and Postgres.
+        saved = saved.filter(place__types__icontains=f'"{place_type}"')
+    saved = saved.order_by(*SAVED_SORTS.get(params.get('sort'), SAVED_SORTS['saved']))
     saved = saved.select_related('place').prefetch_related('tags')
     return Response({'results': SavedPlaceSerializer(saved, many=True).data})
 
@@ -337,6 +369,65 @@ def user_saved_places(request, user_id):
     if owner is None:
         return Response({'detail': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
     return _saved_list(permissions.visible_saved_places(request.user).filter(user=owner), request.query_params)
+
+
+USER_SEARCH_LIMIT = 20
+
+
+@api_view(['GET'])
+def user_search(request):
+    """Find people by username (?q=, ignores case). Names starting with q come first. Never includes me."""
+    q = request.query_params.get('q', '').strip()
+    if not q:
+        return Response({'results': []})
+    users = list(
+        get_user_model().objects.filter(username__icontains=q).exclude(pk=request.user.pk)
+        .annotate(starts=Case(When(username__istartswith=q, then=Value(0)), default=Value(1)))
+        .order_by('starts', Lower('username'))[:USER_SEARCH_LIMIT]
+    )
+    statuses = permissions.friendship_statuses(request.user, [u.pk for u in users])
+    for u in users:
+        u.friendship = statuses[u.pk]
+    return Response({'results': UserSearchResultSerializer(users, many=True).data})
+
+
+@api_view(['GET'])
+def user_profile(request, user_id):
+    """Someone's profile (or mine) as I'm allowed to see it, with counts."""
+    user = get_user_model().objects.filter(pk=user_id).first()
+    if user is None:
+        return Response({'detail': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
+    # Saved and visited only count what I could see in their list, so private saves stay private.
+    visible = permissions.visible_saved_places(request.user).filter(user=user)
+    counts = visible.aggregate(saved=Count('id'), visited=Count('id', filter=Q(visited=True)))
+    return Response({
+        'id': user.pk,
+        'username': user.username,
+        'friendship': permissions.friendship_statuses(request.user, [user.pk])[user.pk],
+        'counts': {
+            'friends': permissions.friends_of(user).count(),
+            'saved': counts['saved'],
+            'visited': counts['visited'],
+        },
+    })
+
+
+FEED_DEFAULT_LIMIT = 50
+FEED_MAX_LIMIT = 100
+
+
+@api_view(['GET'])
+def feed(request):
+    """Home friends feed: friends' saved places I can see, newest save or visit first.
+
+    ?limit= (default 50, max 100).
+    """
+    limit = request.query_params.get('limit', '')
+    limit = min(int(limit), FEED_MAX_LIMIT) if limit.isdigit() and int(limit) > 0 else FEED_DEFAULT_LIMIT
+    items = permissions.friends_feed(request.user).annotate(
+        feed_at=Greatest('created_at', Coalesce('marked_visited_at', 'created_at')),
+    ).select_related('user', 'place').prefetch_related('tags').order_by('-feed_at', '-id')[:limit]
+    return Response({'results': FeedItemSerializer(items, many=True).data})
 
 
 # --- Place interest (Phase 3) ---------------------------------------------

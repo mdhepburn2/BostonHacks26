@@ -77,18 +77,15 @@ the user later wants Scan as its own tab, it's an easy move.
 
 ## Open API questions
 
-These tab features need things the API doesn't have yet (as of `../api/CLAUDE.md`). When
-you reach one, tell the user what's needed. Don't build the backend part, and don't fake it
-long-term in the app. Mocking in `src/api/` to unblock UI work is fine if you mark it clearly.
+Phase 2 and 3 are built, plus the friends feed (`GET /api/feed/`), people search
+(`GET /api/users/search/?q=`), profiles with counts (`GET /api/users/<id>/`), and saved list
+filters and sorts (see `../api/CLAUDE.md`). One tab feature still doesn't map exactly onto the
+API. When you reach it, tell the user what's needed. Don't build the backend part, and don't fake
+it long-term in the app. Mocking in `src/api/` to unblock UI work is fine if you mark it clearly.
 
 | Feature | What's missing in the API |
 |---|---|
-| Home friends feed | No feed endpoint for friends' visible saved places (only `/api/users/<id>/saved/` per user) |
-| Search people | No user search endpoint (e.g. `GET /api/users/search/?q=`) |
-| Profile stats | No endpoint for a user's profile + counts (friends, saved, visited) |
-| "Visible to certain friends" | Visibility is `private / friends / circle / public`. Per-friend picking would need a circle (a group of friends) or a new option |
-| Filter saved by price / type | `/api/saved/` returns only `place {id, name, lat, lng}`. Filtering needs `price_range` and `types` on each item, or query params on the endpoint |
-| Accounts, saving, friends | All of Phase 2 and 3 isn't built yet |
+| "Visible to certain friends" | Visibility is `private / friends / circle / public`. Per-friend picking means choosing (or creating) a circle of those friends, or a new option |
 
 ## Stack
 

@@ -89,6 +89,30 @@ def are_friends(a, b):
     return friendships_between(a, b).filter(status=Friendship.STATUS_ACCEPTED).exists()
 
 
+FRIENDSHIP_SELF = 'self'
+FRIENDSHIP_FRIENDS = 'friends'
+FRIENDSHIP_SENT = 'request_sent'          # I asked them, they haven't answered
+FRIENDSHIP_RECEIVED = 'request_received'  # they asked me, I haven't answered
+FRIENDSHIP_NONE = 'none'                  # also when they declined me, so declines stay private
+
+
+def friendship_statuses(viewer, user_ids):
+    """{user_id: friendship status from the viewer's side} for each id, in one query."""
+    statuses = dict.fromkeys(user_ids, FRIENDSHIP_NONE)
+    rows = Friendship.objects.filter(
+        Q(from_user=viewer, to_user__in=user_ids) | Q(to_user=viewer, from_user__in=user_ids)
+    ).values_list('from_user_id', 'to_user_id', 'status')
+    for from_id, to_id, row_status in rows:
+        other = to_id if from_id == viewer.pk else from_id
+        if row_status == Friendship.STATUS_ACCEPTED:
+            statuses[other] = FRIENDSHIP_FRIENDS
+        elif row_status == Friendship.STATUS_PENDING and statuses[other] != FRIENDSHIP_FRIENDS:
+            statuses[other] = FRIENDSHIP_SENT if from_id == viewer.pk else FRIENDSHIP_RECEIVED
+    if viewer.pk in statuses:
+        statuses[viewer.pk] = FRIENDSHIP_SELF
+    return statuses
+
+
 def incoming_requests(user):
     """Pending friend requests sent to the user. Only they can accept or decline these."""
     return Friendship.objects.filter(to_user=user, status=Friendship.STATUS_PENDING)
@@ -111,6 +135,11 @@ def _visible_q(viewer, owner_field):
 def visible_saved_places(viewer):
     """Every saved place `viewer` is allowed to see, going by each one's own visibility."""
     return SavedPlace.objects.filter(_visible_q(viewer, 'user'))
+
+
+def friends_feed(viewer):
+    """Saved places of the viewer's accepted friends that the viewer is allowed to see (never their own)."""
+    return visible_saved_places(viewer).filter(user__in=friend_ids(viewer))
 
 
 # --- Place interest (Phase 3) ---------------------------------------------

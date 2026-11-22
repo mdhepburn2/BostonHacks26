@@ -4,6 +4,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from . import permissions
+from .services.google_places import price_range
 from .models import Activity, ActivityResponse, Circle, CircleMembership, Friendship, Place, SavedPlace, Tag, Visibility
 
 User = get_user_model()
@@ -89,6 +90,18 @@ class PlaceShortSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'lat', 'lng']
 
 
+class SavedPlacePlaceSerializer(PlaceShortSerializer):
+    """The place inside a saved place: enough to filter the Saved tab by price and type."""
+
+    price_range = serializers.SerializerMethodField()
+
+    class Meta(PlaceShortSerializer.Meta):
+        fields = PlaceShortSerializer.Meta.fields + ['price_range', 'types']
+
+    def get_price_range(self, place):
+        return price_range(place.price_level)
+
+
 def resolve_visibility(attrs, instance, user):
     """Check visibility + circle_id together and turn circle_id into `circle`.
 
@@ -149,7 +162,7 @@ class TagSerializer(serializers.ModelSerializer):
 class SavedPlaceSerializer(serializers.ModelSerializer):
     """Saved place shape, and the body for POST /api/saved/ and PATCH /api/saved/<id>/."""
 
-    place = PlaceShortSerializer(read_only=True)
+    place = SavedPlacePlaceSerializer(read_only=True)
     place_id = serializers.PrimaryKeyRelatedField(
         queryset=Place.objects.all(), source='place', write_only=True,
         error_messages={'does_not_exist': 'Place not found.', 'incorrect_type': 'place_id must be a number.'},
@@ -205,8 +218,12 @@ class SavedPlaceSerializer(serializers.ModelSerializer):
         visited_at = attrs.get('visited_at', self.instance.visited_at if self.instance else None)
         if not visited:
             attrs['visited_at'] = None
-        elif visited_at is None:
-            attrs['visited_at'] = timezone.localdate()
+            attrs['marked_visited_at'] = None
+        else:
+            if visited_at is None:
+                attrs['visited_at'] = timezone.localdate()
+            if self.instance is None or not self.instance.visited:
+                attrs['marked_visited_at'] = timezone.now()  # just ticked: bump it in friends' feeds
 
 
 # --- Friends (Phase 3) ----------------------------------------------------
@@ -217,6 +234,23 @@ class UserShortSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id', 'username']
+
+
+class UserSearchResultSerializer(UserShortSerializer):
+    """One result in GET /api/users/search/. The view sets `friendship` on each user."""
+
+    friendship = serializers.CharField()
+
+    class Meta(UserShortSerializer.Meta):
+        fields = UserShortSerializer.Meta.fields + ['friendship']
+
+
+class FeedItemSerializer(serializers.Serializer):
+    """One item in GET /api/feed/: a friend's saved place. `feed_at` comes from the view's annotation."""
+
+    friend = UserShortSerializer(source='user')
+    saved = SavedPlaceSerializer(source='*')
+    feed_at = serializers.DateTimeField()
 
 
 class FriendRequestSerializer(serializers.ModelSerializer):
