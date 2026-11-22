@@ -53,3 +53,24 @@ export type SavedPlace = {
   tags: Tag[];
   created_at: string;
 };
+
+/** One result from GET /api/places/search/ */
+export type SearchResult = PlaceSummary & {
+  address: string;
+};
+
+/** GET /api/places/search/?q=&lat=&lng= */
+export type SearchResponse = {
+  results: SearchResult[];
+};
+
+export type IdentifyStatus = 'matched' | 'ambiguous' | 'not_found';
+
+/** POST /api/identify/ */
+export type IdentifyResponse = {
+  status: IdentifyStatus;
+  /** null unless status is matched or ambiguous. */
+  place: PlaceSummary | null;
+  candidates: PlaceSummary[];
+  confidence: number;
+};
