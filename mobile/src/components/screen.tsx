@@ -31,6 +31,9 @@ export function Screen({ title, subtitle, children }: ScreenProps) {
     <ScrollView
       style={{ backgroundColor: theme.background }}
       contentInsetAdjustmentBehavior="automatic"
+      // Tapping a search result should open it, not just dismiss the keyboard.
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
       contentContainerStyle={[styles.content, padding]}>
       {title ? (
         <View style={styles.header}>
