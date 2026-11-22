@@ -26,25 +26,49 @@ JPEG_QUALITY = 85
 VISION_PROMPT = """You are helping someone walking around Boston identify the place in their photo.
 
 They are standing at latitude {lat:.5f}, longitude {lng:.5f}{heading_text}.
-These are the only places it can be. Each line is: number. name (type, distance and direction from the user).
+These are the places near them. Each line is: number. name (type, distance and direction from the user).
 
 {candidate_lines}
 
-Look at the photo and decide which numbered place it shows. Rules:
+The image may not show any of these places, or may not be a photo of a place at all
+(people take photos by accident, or of their screen). Saying "none of them" is a normal,
+correct answer. Work through these fields in order:
+
+1. "photo_shows": one short sentence describing only what is literally visible.
+2. "is_place_photo": true only if this is a camera photo of a real-world scene: a building,
+   storefront, street, landmark, statue, park or a room inside a venue. false for logos,
+   icons, app or splash screens, screenshots, drawings, graphics, documents, close-ups of a
+   single object, and blank, dark or unreadably blurry images.
+3. "evidence": the specific thing in the photo that ties it to your first pick, such as the
+   place's name on a sign, or a building or statue that clearly fits its type. Leave it
+   empty if there is nothing like that.
+4. "ranked": up to 3 numbers from the list above, best match first. Leave it empty if
+   "is_place_photo" is false or nothing in the photo points to any of them. Never pick a
+   place just because it is the closest, or because a shape or colour vaguely resembles it.
+5. "confidence": how sure you are (0 to 1) that the FIRST number in "ranked" is what the
+   photo shows. Use 0 if "ranked" is empty. Only go above 0.7 when the evidence is specific
+   (a readable name, or a distinctive landmark). If you are guessing, stay below 0.4.
+
+Rules:
 - You may ONLY answer with numbers from the list above. Never invent a place.
-- Use only the photo and the information above. Don't rely on outside guesses about what is nearby.
-- "ranked" holds up to 3 numbers, best match first. Leave it empty if the photo shows none of them.
-- "confidence" is how sure you are (0 to 1) that the FIRST number in "ranked" is what the photo shows. Use 0 if "ranked" is empty.
+- Use only the photo and the information above.
 """
 
 VISION_SCHEMA = {
     'type': 'OBJECT',
     'properties': {
+        'photo_shows': {'type': 'STRING'},
+        'is_place_photo': {'type': 'BOOLEAN'},
+        'evidence': {'type': 'STRING'},
         'ranked': {'type': 'ARRAY', 'items': {'type': 'INTEGER'}},
         'confidence': {'type': 'NUMBER'},
     },
-    'required': ['ranked', 'confidence'],
+    'required': ['photo_shows', 'is_place_photo', 'evidence', 'ranked', 'confidence'],
+    # Gemini fills fields in this order, so it describes the image before it picks.
+    'propertyOrdering': ['photo_shows', 'is_place_photo', 'evidence', 'ranked', 'confidence'],
 }
+# Without any stated evidence the pick is a guess, so it can be "ambiguous" at most.
+NO_EVIDENCE_MAX_CONFIDENCE = 0.5
 
 
 BIO_PROMPT = """Write a short bio for a place card in an app for people exploring Boston on foot.
@@ -110,7 +134,11 @@ def match_photo(image_bytes, candidates, lat, lng, heading=None):
 def _validate_vision(data, n_candidates):
     ranked = data.get('ranked')
     confidence = data.get('confidence')
-    if not isinstance(ranked, list) or isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+    is_place_photo = data.get('is_place_photo')
+    evidence = data.get('evidence')
+    if (not isinstance(ranked, list) or isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float)) or not isinstance(is_place_photo, bool)
+            or not isinstance(evidence, str)):
         raise ExternalAPIError(f'gemini.vision returned an unexpected shape: {data!r}')
 
     indices = []
@@ -120,7 +148,15 @@ def _validate_vision(data, n_candidates):
         if n - 1 not in indices:
             indices.append(n - 1)
 
+    logger.info('gemini.vision: shows=%r place_photo=%s evidence=%r ranked=%s confidence=%s',
+                data.get('photo_shows'), is_place_photo, evidence, ranked, confidence)
+
     confidence = min(max(float(confidence), 0.0), 1.0)
+    if not is_place_photo:
+        # A logo, screenshot or blank frame: whatever it ranked is a guess.
+        indices = []
+    if not evidence.strip():
+        confidence = min(confidence, NO_EVIDENCE_MAX_CONFIDENCE)
     if not indices:
         confidence = 0.0
     return {'ranked': indices[:3], 'confidence': confidence}

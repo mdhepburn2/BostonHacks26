@@ -1,4 +1,5 @@
 import io
+import json
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from PIL import Image
@@ -324,26 +325,46 @@ from .services import identify as identify_service
 from .services import llm
 
 
+def vision_reply(ranked, confidence, place_photo=True, evidence='name on the sign'):
+    return {'photo_shows': 'a storefront', 'is_place_photo': place_photo, 'evidence': evidence,
+            'ranked': ranked, 'confidence': confidence}
+
+
 class VisionValidationTests(TestCase):
     def test_converts_to_zero_based_and_dedupes(self):
-        self.assertEqual(llm._validate_vision({'ranked': [2, 2, 1], 'confidence': 0.8}, 3),
+        self.assertEqual(llm._validate_vision(vision_reply([2, 2, 1], 0.8), 3),
                          {'ranked': [1, 0], 'confidence': 0.8})
 
     def test_caps_at_three_and_clamps_confidence(self):
-        out = llm._validate_vision({'ranked': [1, 2, 3, 4], 'confidence': 1.5}, 4)
+        out = llm._validate_vision(vision_reply([1, 2, 3, 4], 1.5), 4)
         self.assertEqual(out, {'ranked': [0, 1, 2], 'confidence': 1.0})
 
     def test_empty_ranking_forces_zero_confidence(self):
-        self.assertEqual(llm._validate_vision({'ranked': [], 'confidence': 0.9}, 3),
+        self.assertEqual(llm._validate_vision(vision_reply([], 0.9), 3),
                          {'ranked': [], 'confidence': 0.0})
+
+    def test_not_a_place_photo_drops_the_pick(self):
+        # e.g. the app's splash logo: the model still guessed a nearby place
+        out = llm._validate_vision(vision_reply([1], 0.8, place_photo=False), 3)
+        self.assertEqual(out, {'ranked': [], 'confidence': 0.0})
+
+    def test_no_evidence_caps_confidence_below_matched(self):
+        out = llm._validate_vision(vision_reply([1], 0.9, evidence='  '), 3)
+        self.assertEqual(out, {'ranked': [0], 'confidence': llm.NO_EVIDENCE_MAX_CONFIDENCE})
+        self.assertLess(out['confidence'], identify_service.MATCHED_MIN)
 
     def test_rejects_invented_index(self):
         for bad in ([0], [4], [True], ['1']):
             with self.assertRaises(ExternalAPIError):
-                llm._validate_vision({'ranked': bad, 'confidence': 0.9}, 3)
+                llm._validate_vision(vision_reply(bad, 0.9), 3)
 
     def test_rejects_wrong_shape(self):
-        for bad in ({}, {'ranked': 1, 'confidence': 0.5}, {'ranked': [1]}, {'ranked': [1], 'confidence': 'high'}):
+        good = vision_reply([1], 0.5)
+        bad_replies = [{}, {**good, 'ranked': 1}, {**good, 'confidence': 'high'},
+                       {**good, 'is_place_photo': 'yes'}, {**good, 'evidence': None}]
+        for key in ('ranked', 'confidence', 'is_place_photo', 'evidence'):
+            bad_replies.append({k: v for k, v in good.items() if k != key})
+        for bad in bad_replies:
             with self.assertRaises(ExternalAPIError):
                 llm._validate_vision(bad, 3)
 
@@ -359,7 +380,7 @@ class VisionValidationTests(TestCase):
                 llm.match_photo(b'x', [{'name': 'A', 'kind': 'k', 'distance_m': 1, 'direction': 'north'}], 0, 0)
 
     def test_full_call_parses_reply(self):
-        reply = {'candidates': [{'content': {'parts': [{'text': '{"ranked": [1], "confidence": 0.75}'}]}}]}
+        reply = {'candidates': [{'content': {'parts': [{'text': json.dumps(vision_reply([1], 0.75))}]}}]}
         with self.settings(LLM_API_KEY='k'), umock.patch.object(llm, 'request_json', return_value=reply) as req:
             out = llm.match_photo(b'x', [{'name': 'A', 'kind': 'k', 'distance_m': 1, 'direction': 'north'}], 0, 0)
         self.assertEqual(out, {'ranked': [0], 'confidence': 0.75})
