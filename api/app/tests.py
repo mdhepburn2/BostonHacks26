@@ -1125,7 +1125,8 @@ class PlaceCardSavedTests(LoggedInTestCase):
         saved = SavedPlace.objects.create(user=self.user, place=self.place, visited=True,
                                           visited_at=datetime.date(2026, 3, 2))
         body = self.client.get(f'/api/places/{self.place.id}/').json()
-        self.assertEqual(body['saved'], {'id': saved.id, 'visited': True, 'visited_at': '2026-03-02'})
+        self.assertEqual(body['saved'], {'id': saved.id, 'visited': True, 'visited_at': '2026-03-02',
+                                         'visibility': 'private', 'circle_id': None})
 
     def test_card_ignores_other_users_saves(self, *mocks):
         SavedPlace.objects.create(user=self.other, place=self.place)

@@ -174,7 +174,7 @@ Don't change these shapes without telling the frontend team. All URLs are under 
   "nearest_t": { "stop": "", "lines": [""], "walk_min": 0 },
   "friends_interested": 0,
   "interested": false,
-  "saved": { "id": 0, "visited": false, "visited_at": null }
+  "saved": { "id": 0, "visited": false, "visited_at": null, "visibility": "private", "circle_id": null }
 }
 ```
 - `rating`, `rating_count`, `price_range` and `hours` are `null` when Google has no data (common for landmarks and Wikipedia-only places).

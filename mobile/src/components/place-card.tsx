@@ -14,7 +14,13 @@ import { useTheme } from '@/hooks/use-theme';
  * The full place card: a big colour block with the name, then the details as
  * street-sign rows. Each place gets its own colour pair, picked from its id.
  */
-export function PlaceCard({ place }: { place: PlaceDetail }) {
+type PlaceCardProps = {
+  place: PlaceDetail;
+  /** Shown right under the big colour block, e.g. the Save panel. */
+  actions?: ReactNode;
+};
+
+export function PlaceCard({ place, actions }: PlaceCardProps) {
   const theme = useTheme();
   const { accent, shape: shapeAccent } = placeAccents(place.id);
   const background = theme[accent];
@@ -58,6 +64,8 @@ export function PlaceCard({ place }: { place: PlaceDetail }) {
           ) : null}
         </View>
       </View>
+
+      {actions}
 
       {place.bio ? <ThemedText>{place.bio}</ThemedText> : null}
 

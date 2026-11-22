@@ -7,7 +7,7 @@ import { SignInPrompt } from '@/components/sign-in-prompt';
 import { ThemedText } from '@/components/themed-text';
 import { AccentKeys, OnAccent, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
-import { useRequest } from '@/hooks/use-request';
+import { useRefreshOnFocus, useRequest } from '@/hooks/use-request';
 import { useTheme } from '@/hooks/use-theme';
 
 // Step 13 adds my visible saved places, edit and settings; step 16 adds friend requests.
@@ -15,6 +15,7 @@ export default function ProfileScreen() {
   const theme = useTheme();
   const { status, user, logout } = useAuth();
   const profile = useRequest(user ? `profile:${user.id}` : null, () => getProfile(user?.id ?? 0));
+  useRefreshOnFocus(profile.refresh);
 
   const accent = AccentKeys[(user?.id ?? 1) % AccentKeys.length];
   const counts = profile.data?.counts;
@@ -25,7 +26,10 @@ export default function ProfileScreen() {
   ];
 
   return (
-    <Screen title="Profile">
+    <Screen
+      title="Profile"
+      refreshing={profile.refreshing}
+      onRefresh={user ? profile.refresh : undefined}>
       <View style={styles.identity}>
         <View style={[styles.avatar, { backgroundColor: user ? theme[accent] : theme.blue }]}>
           <ThemedText type="subtitle" style={{ color: theme[OnAccent[user ? accent : 'blue']] }}>

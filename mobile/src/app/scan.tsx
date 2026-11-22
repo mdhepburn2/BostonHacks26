@@ -20,6 +20,9 @@ import { useTheme } from '@/hooks/use-theme';
 /** The API resizes to 1024px anyway, so a smaller upload is just faster. */
 const PHOTO_QUALITY = 0.5;
 
+/** After this long with no GPS fix, suggest checking Location Services. */
+const LOCATION_HINT_MS = 10_000;
+
 /** The API sends up to 3 candidates; the contract says to show at most 3. */
 const MAX_CANDIDATES = 3;
 
@@ -106,6 +109,15 @@ function Viewfinder({ coords }: { coords: Coords | null }) {
 
   const canShoot = ready && coords !== null && !taking && scan.step === 'live';
 
+  // No fix for a while usually means Location Services are off, or the user is indoors.
+  const [slowFix, setSlowFix] = useState(false);
+  const hasFix = coords !== null;
+  useEffect(() => {
+    if (hasFix) return;
+    const timer = setTimeout(() => setSlowFix(true), LOCATION_HINT_MS);
+    return () => clearTimeout(timer);
+  }, [hasFix]);
+
   const send = async (shot: IdentifyInput) => {
     const id = ++requestId.current;
     setScan({ step: 'identifying', shot });
@@ -182,8 +194,12 @@ function Viewfinder({ coords }: { coords: Coords | null }) {
           {scan.step === 'identifying' || !coords ? (
             <View style={styles.pill} accessibilityLiveRegion="polite">
               <ActivityIndicator size="small" color={ON_CAMERA} />
-              <ThemedText type="small" style={styles.onCamera}>
-                {scan.step === 'identifying' ? 'Identifying...' : 'Finding your location...'}
+              <ThemedText type="small" style={[styles.onCamera, styles.pillText]}>
+                {scan.step === 'identifying'
+                  ? 'Identifying...'
+                  : slowFix
+                    ? "Still looking for you. Check that Location Services are on."
+                    : 'Finding your location...'}
               </ThemedText>
             </View>
           ) : null}
@@ -391,6 +407,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.three,
     borderRadius: 999,
     backgroundColor: 'rgba(0,0,0,0.55)',
+    maxWidth: '90%',
+  },
+  pillText: {
+    flexShrink: 1,
   },
   shutter: {
     width: 80,

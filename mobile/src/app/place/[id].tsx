@@ -4,20 +4,36 @@ import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { EmptyState } from '@/components/empty-state';
 import { PlaceCard } from '@/components/place-card';
 import { RetryButton } from '@/components/retry-button';
+import { SavePanel } from '@/components/save-panel';
 import { Screen } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
+import { useAuth } from '@/hooks/use-auth';
 import { usePlace } from '@/hooks/use-place';
 import { useTheme } from '@/hooks/use-theme';
 
 export default function PlaceScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const theme = useTheme();
+  const { user } = useAuth();
   const { loading, data: place, error, retry } = usePlace(id);
 
   let body;
   if (place) {
-    body = <PlaceCard place={place} />;
+    body = (
+      <PlaceCard
+        place={place}
+        actions={
+          // Remount on login / logout so the panel starts from the reloaded card.
+          <SavePanel
+            key={`${place.id}:${user?.id ?? 'guest'}`}
+            placeId={place.id}
+            placeName={place.name}
+            initial={place.saved}
+          />
+        }
+      />
+    );
   } else if (loading) {
     body = (
       <View style={styles.loading}>

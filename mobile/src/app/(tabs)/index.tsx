@@ -3,6 +3,7 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { getSaved } from '@/api/saved';
 import { getFeed } from '@/api/social';
+import type { FeedResponse, SavedListResponse } from '@/api/types';
 import { Button } from '@/components/button';
 import { Crosswalk } from '@/components/crosswalk';
 import { EmptyState } from '@/components/empty-state';
@@ -15,7 +16,7 @@ import { Section } from '@/components/section';
 import { SignInPrompt } from '@/components/sign-in-prompt';
 import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
-import { useRequest } from '@/hooks/use-request';
+import { type RequestState, useRefreshOnFocus, useRequest } from '@/hooks/use-request';
 
 const RECENT_COUNT = 5;
 const FEED_COUNT = 20;
@@ -23,13 +24,24 @@ const FEED_COUNT = 20;
 export default function HomeScreen() {
   const { status, user } = useAuth();
   const signedIn = status === 'signedIn' && user !== null;
+  const recent = useRequest(signedIn ? `home-saved:${user.id}` : null, () => getSaved());
+  const feed = useRequest(signedIn ? `home-feed:${user.id}` : null, () => getFeed(FEED_COUNT));
+  const refresh = () => {
+    recent.refresh();
+    feed.refresh();
+  };
+  useRefreshOnFocus(refresh);
 
   return (
-    <Screen title="Home" subtitle="Explore Boston on foot">
+    <Screen
+      title="Home"
+      subtitle="Explore Boston on foot"
+      refreshing={recent.refreshing || feed.refreshing}
+      onRefresh={signedIn ? refresh : undefined}>
       <ScanButton />
       <Crosswalk />
       {signedIn ? (
-        <SignedInHome userId={user.id} />
+        <SignedInHome recent={recent} feed={feed} />
       ) : status === 'signedOut' ? (
         <SignInPrompt
           accent="yellow"
@@ -42,10 +54,12 @@ export default function HomeScreen() {
   );
 }
 
-function SignedInHome({ userId }: { userId: number }) {
-  const recent = useRequest(`home-saved:${userId}`, () => getSaved());
-  const feed = useRequest(`home-feed:${userId}`, () => getFeed(FEED_COUNT));
+type SignedInHomeProps = {
+  recent: RequestState<SavedListResponse>;
+  feed: RequestState<FeedResponse>;
+};
 
+function SignedInHome({ recent, feed }: SignedInHomeProps) {
   return (
     <>
       <Section title="Recently saved" accent="yellow">

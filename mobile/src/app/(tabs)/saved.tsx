@@ -10,16 +10,21 @@ import { SignChip } from '@/components/sign-chip';
 import { SignInPrompt } from '@/components/sign-in-prompt';
 import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
-import { useRequest } from '@/hooks/use-request';
+import { useRefreshOnFocus, useRequest } from '@/hooks/use-request';
 import { useTheme } from '@/hooks/use-theme';
 
 // Step 11 adds search, filters (price, type, visited, visibility) and sorting on top of this.
 export default function SavedScreen() {
   const { status, user } = useAuth();
   const saved = useRequest(user ? `saved:${user.id}` : null, () => getSaved());
+  useRefreshOnFocus(saved.refresh);
 
   return (
-    <Screen title="Saved" subtitle="Places you want to go, and places you've been">
+    <Screen
+      title="Saved"
+      subtitle="Places you want to go, and places you've been"
+      refreshing={saved.refreshing}
+      onRefresh={user ? saved.refresh : undefined}>
       {user ? (
         <Loadable
           state={saved}

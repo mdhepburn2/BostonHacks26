@@ -6,10 +6,16 @@ export type NearestT = {
   walk_min: number;
 };
 
+export type Visibility = 'private' | 'friends' | 'circle' | 'public';
+
+/** `saved` on the place card: my own saved place for it. */
 export type SavedInfo = {
   id: number;
   visited: boolean;
+  /** "YYYY-MM-DD", or null when not visited. */
   visited_at: string | null;
+  visibility: Visibility;
+  circle_id: number | null;
 };
 
 /** GET /api/places/<id>/ */
@@ -35,8 +41,6 @@ export type PlaceSummary = {
   lat: number;
   lng: number;
 };
-
-export type Visibility = 'private' | 'friends' | 'circle' | 'public';
 
 export type Tag = {
   id: number;
@@ -132,4 +136,19 @@ export type FeedItem = {
 /** GET /api/feed/ */
 export type FeedResponse = {
   results: FeedItem[];
+};
+
+/** One item from GET /api/circles/ (circles I own or belong to). */
+export type Circle = {
+  id: number;
+  name: string;
+  description: string;
+  owner: UserSummary;
+  members: (UserSummary & { role: 'owner' | 'member'; joined_at: string })[];
+  created_at: string;
+};
+
+/** GET /api/circles/ */
+export type CirclesResponse = {
+  results: Circle[];
 };

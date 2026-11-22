@@ -4,11 +4,6 @@
 
 ## Scope rule
 
-**Only change files inside `mobile/`.** The backend lives in `../api/` and has its own
-CLAUDE.md. If a mobile feature needs a backend change (new endpoint, different response
-shape, a bug in the API), stop and tell the user what's needed and why; don't edit `api/`.
-Reading `../api/` to check how an endpoint behaves is fine.
-
 Don't make git commits. Leave changes uncommitted for the user to review.
 
 ## What this app is
@@ -187,7 +182,7 @@ are template code. Replace or delete them as the real screens go in.
   "hours": ["Monday: 9:00 AM - 5:00 PM", "..."],
   "nearest_t": { "stop": "", "lines": [""], "walk_min": 0 },
   "friends_interested": 0,
-  "saved": { "id": 0, "visited": false, "visited_at": null }
+  "saved": { "id": 0, "visited": false, "visited_at": null, "visibility": "private", "circle_id": null }
 }
 ```
 - `rating`, `rating_count`, `price_range`, `hours` can each be `null` (common for landmarks).

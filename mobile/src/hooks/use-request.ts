@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '@/api/client';
 
@@ -7,7 +8,12 @@ export type RequestState<T> = {
   loading: boolean;
   data: T | null;
   error: ApiError | null;
+  /** Clears the error and loads again, showing the spinner. */
   retry: () => void;
+  /** Loads again in the background, keeping the current data on screen (pull to refresh). */
+  refresh: () => void;
+  /** A background refresh is in flight. */
+  refreshing: boolean;
 };
 
 type Fetched<T> = { key: string; data: T | null; error: ApiError | null };
@@ -20,6 +26,7 @@ type Fetched<T> = { key: string; data: T | null; error: ApiError | null };
 export function useRequest<T>(key: string | null, fetcher: () => Promise<T>): RequestState<T> {
   const [fetched, setFetched] = useState<Fetched<T> | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   const fetcherRef = useRef(fetcher);
   useEffect(() => {
     fetcherRef.current = fetcher;
@@ -39,7 +46,13 @@ export function useRequest<T>(key: string | null, fetcher: () => Promise<T>): Re
           err instanceof ApiError
             ? err
             : new ApiError('unavailable', 'Something went wrong. Please try again.', null);
-        setFetched({ key, data: null, error });
+        // A failed background refresh keeps what's already on screen.
+        setFetched((prev) =>
+          prev?.key === key && prev.data !== null ? prev : { key, data: null, error },
+        );
+      })
+      .finally(() => {
+        if (!stale) setRefreshing(false);
       });
     return () => {
       stale = true;
@@ -57,5 +70,33 @@ export function useRequest<T>(key: string | null, fetcher: () => Promise<T>): Re
       setFetched(null);
       setAttempt((n) => n + 1);
     },
+    refresh: () => {
+      if (key === null) return;
+      setRefreshing(true);
+      setAttempt((n) => n + 1);
+    },
+    refreshing: key !== null && refreshing,
   };
+}
+
+/**
+ * Calls `refresh` each time the screen comes back into focus (not on the first visit, which
+ * already loads). Tabs stay mounted, so without this they'd show what was there on first load.
+ */
+export function useRefreshOnFocus(refresh: () => void) {
+  const refreshRef = useRef(refresh);
+  useEffect(() => {
+    refreshRef.current = refresh;
+  });
+  const firstFocus = useRef(true);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (firstFocus.current) {
+        firstFocus.current = false;
+        return;
+      }
+      refreshRef.current();
+    }, []),
+  );
 }

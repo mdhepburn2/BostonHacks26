@@ -240,7 +240,13 @@ def _response(place, card, saved=None, interested=False, friends_interested=0):
         'nearest_t': card.nearest_t or None,  # {} means "no T stop nearby"
         'friends_interested': friends_interested,
         'interested': interested,
-        'saved': {'id': saved.id, 'visited': saved.visited, 'visited_at': saved.visited_at} if saved else None,
+        'saved': {
+            'id': saved.id,
+            'visited': saved.visited,
+            'visited_at': saved.visited_at,
+            'visibility': saved.visibility,
+            'circle_id': saved.circle_id,
+        } if saved else None,
     }
 
 

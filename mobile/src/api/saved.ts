@@ -1,5 +1,5 @@
 import { request } from '@/api/client';
-import type { SavedListResponse } from '@/api/types';
+import type { SavedListResponse, SavedPlace, Visibility } from '@/api/types';
 
 export type SavedSort = 'saved' | 'visited' | 'name';
 
@@ -18,4 +18,29 @@ export function getSaved(filters: SavedFilters = {}): Promise<SavedListResponse>
       sort: filters.sort,
     },
   });
+}
+
+export type SavedChanges = {
+  visited?: boolean;
+  /** "YYYY-MM-DD", not in the future. Sending it marks the place visited. */
+  visited_at?: string;
+  /** private (only me), friends, circle (with circle_id) or public (anyone logged in). */
+  visibility?: Visibility;
+  /** Required when visibility is "circle": a circle I belong to. */
+  circle_id?: number;
+};
+
+/** Save a place. Returns the existing saved place unchanged if it was already saved. */
+export function savePlace(placeId: number, changes: SavedChanges = {}): Promise<SavedPlace> {
+  return request('/api/saved/', { method: 'POST', body: { place_id: placeId, ...changes } });
+}
+
+/** Update visited / visited_at / visibility. `visited: false` clears the date. */
+export function updateSaved(savedId: number, changes: SavedChanges): Promise<SavedPlace> {
+  return request(`/api/saved/${savedId}/`, { method: 'PATCH', body: changes });
+}
+
+/** Unsave. Its note and tags go with it. */
+export function unsave(savedId: number): Promise<null> {
+  return request(`/api/saved/${savedId}/`, { method: 'DELETE' });
 }

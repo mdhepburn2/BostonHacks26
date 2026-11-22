@@ -1,5 +1,5 @@
 import { type ReactNode } from 'react';
-import { Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -10,6 +10,9 @@ type ScreenProps = {
   /** Large title at the top. Leave out when the stack header already names the screen. */
   title?: string;
   subtitle?: string;
+  /** Pass both to turn on pull to refresh. */
+  refreshing?: boolean;
+  onRefresh?: () => void;
   children?: ReactNode;
 };
 
@@ -17,7 +20,7 @@ type ScreenProps = {
  * Scrollable tab screen with a large title. The ScrollView is the root so the
  * native tab bar's tap-to-scroll-to-top works.
  */
-export function Screen({ title, subtitle, children }: ScreenProps) {
+export function Screen({ title, subtitle, refreshing, onRefresh, children }: ScreenProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
 
@@ -34,6 +37,15 @@ export function Screen({ title, subtitle, children }: ScreenProps) {
       // Tapping a search result should open it, not just dismiss the keyboard.
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="on-drag"
+      refreshControl={
+        onRefresh ? (
+          <RefreshControl
+            refreshing={refreshing ?? false}
+            onRefresh={onRefresh}
+            tintColor={theme.textSecondary}
+          />
+        ) : undefined
+      }
       contentContainerStyle={[styles.content, padding]}>
       {title ? (
         <View style={styles.header}>
