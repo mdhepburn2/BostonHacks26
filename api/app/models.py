@@ -41,9 +41,9 @@ class Place(models.Model):
 
 
 class NearbySearchCache(models.Model):
-    """Candidates for a ~100m grid cell. grid_key is lat,lng rounded to 3 decimals."""
+    """Candidates for a ~55m x 41m grid cell. grid_key is the cell center (see candidates.grid_key)."""
 
-    grid_key = models.CharField(max_length=40, unique=True)  # e.g. "42.358,-71.057"
+    grid_key = models.CharField(max_length=40, unique=True)  # e.g. "42.3580,-71.0575"
     places = models.ManyToManyField(Place, related_name='nearby_caches', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

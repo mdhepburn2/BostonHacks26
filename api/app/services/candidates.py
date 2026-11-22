@@ -4,9 +4,12 @@
 distance from it. It doesn't apply the heading filter (that runs on every
 request, in geo.py) and never calls the LLM.
 
-Caching works on a grid: lat/lng rounded to 3 decimals (~110m x 80m cells in
-Boston). On a miss we search around the cell's center, not the user's exact
-position, so every request in the same cell gets the same cached candidates.
+Caching works on a grid of CELL-degree cells (~55m x 41m in Boston). On a miss
+we search around the cell's center, not the user's exact position, so every
+request in the same cell gets the same cached candidates. Cells are small so
+that center is never more than ~35m from the user: Google only returns the 20
+closest places, so in a dense block a far-off center can cut the place they're
+looking at.
 
 If one source fails we still return what the other gave us, but we don't save
 the cache entry, so the next request in that cell tries again instead of being
@@ -32,6 +35,10 @@ logger = logging.getLogger(__name__)
 
 CACHE_TTL = timedelta(days=7)
 
+# Grid cell size in degrees. Changing it changes every grid_key, so add a
+# migration that clears NearbySearchCache (see 0008_clear_nearby_cache).
+CELL = 0.0005
+
 # A Wikipedia article and a Google place are treated as the same thing when their
 # names match and they're within this distance of each other.
 DEDUPE_MAX_DISTANCE_M = 120
@@ -42,10 +49,15 @@ DEDUPE_MIN_NAME_RATIO = 0.85
 BASIC_FIELDS = ('source', 'name', 'address', 'lat', 'lng', 'types', 'raw_data')
 
 
-def grid_key(lat, lng):
-    """Cache key for the grid cell containing (lat, lng), e.g. "42.358,-71.057"."""
+def snap(value):
+    """`value` rounded to the nearest grid line: the center of its cell."""
     # `+ 0.0` turns -0.0 into 0.0 so the key is stable around the equator/meridian.
-    return f'{round(lat, 3) + 0.0:.3f},{round(lng, 3) + 0.0:.3f}'
+    return round(round(value / CELL) * CELL, 4) + 0.0
+
+
+def grid_key(lat, lng):
+    """Cache key for the grid cell containing (lat, lng), e.g. "42.3580,-71.0570"."""
+    return f'{snap(lat):.4f},{snap(lng):.4f}'
 
 
 def get_candidates(lat, lng):
@@ -60,7 +72,7 @@ def get_candidates(lat, lng):
                     key, len(places), (time.monotonic() - start) * 1000)
         return _sort_by_distance(places, lat, lng)
 
-    center_lat, center_lng = (float(x) for x in key.split(','))
+    center_lat, center_lng = snap(lat), snap(lng)
     google_results, wiki_results, complete = _fetch(center_lat, center_lng)
 
     merged = dedupe(google_results, wiki_results)
@@ -98,7 +110,7 @@ def _result_or_empty(future, label):
 
 # --- Dedupe ---------------------------------------------------------------
 
-def _normalize_name(name):
+def normalize_name(name):
     name = name.lower()
     name = re.sub(r'\s*\(.*?\)', '', name)        # "Old State House (Boston)" -> "old state house"
     name = re.sub(r'[^a-z0-9 ]+', ' ', name)
@@ -107,7 +119,7 @@ def _normalize_name(name):
 
 
 def names_match(a, b):
-    a, b = _normalize_name(a), _normalize_name(b)
+    a, b = normalize_name(a), normalize_name(b)
     if not a or not b:
         return False
     if a == b:
@@ -121,7 +133,7 @@ def names_match(a, b):
 
 def is_subtopic(article_name, place_name):
     """True if the article's name is the place's name plus more words, e.g. "... Museum theft"."""
-    a, p = _normalize_name(article_name), _normalize_name(place_name)
+    a, p = normalize_name(article_name), normalize_name(place_name)
     return bool(p) and a != p and f' {p} ' in f' {a} '
 
 
@@ -131,7 +143,7 @@ def name_similarity(a, b):
     "Isabella Stewart Gardner Museum" matches both the museum's article and
     "Isabella Stewart Gardner Museum theft"; this ranks the museum first.
     """
-    a, b = _normalize_name(a), _normalize_name(b)
+    a, b = normalize_name(a), normalize_name(b)
     return 1.0 if a == b else SequenceMatcher(None, a, b).ratio()
 
 

@@ -13,10 +13,12 @@ export type IdentifyInput = Coords & {
   photoUri: string;
   /** True-north heading in degrees. Leave out if unavailable or negative. */
   heading?: number;
+  /** GPS accuracy in meters. With a poor fix the API trusts the heading less. */
+  accuracy?: number;
 };
 
 /** Scan: send a photo plus where the user is and which way they're facing. */
-export function identify({ photoUri, lat, lng, heading }: IdentifyInput): Promise<IdentifyResponse> {
+export function identify({ photoUri, lat, lng, heading, accuracy }: IdentifyInput): Promise<IdentifyResponse> {
   const form = new FormData();
   // Since SDK 58 the global fetch is expo/fetch, which can't send React Native's
   // { uri, name, type } file objects (it throws before any request goes out).
@@ -25,6 +27,7 @@ export function identify({ photoUri, lat, lng, heading }: IdentifyInput): Promis
   form.append('lat', String(lat));
   form.append('lng', String(lng));
   if (heading !== undefined && heading >= 0) form.append('heading', String(heading));
+  if (accuracy !== undefined && accuracy >= 0) form.append('accuracy', String(accuracy));
 
   return request('/api/identify/', { method: 'POST', body: form, timeoutMs: IDENTIFY_TIMEOUT_MS });
 }

@@ -3,11 +3,14 @@ import { useEffect, useState } from 'react';
 
 import type { Coords } from '@/api/places';
 
+/** A position fix: coords plus how far off the phone says it could be, in meters. */
+export type Fix = Coords & { accuracy?: number };
+
 export type LocationPermission = 'loading' | 'granted' | 'denied' | 'undetermined';
 
 export type LocationState = {
   /** Latest position, or null until the first fix (or if permission isn't granted). */
-  coords: Coords | null;
+  coords: Fix | null;
   permission: LocationPermission;
   /** False once the user has said no for good; only Settings can turn it back on. */
   canAskAgain: boolean;
@@ -26,7 +29,7 @@ type Options = {
  */
 export function useLocation({ accuracy = 'balanced' }: Options = {}): LocationState {
   const [status, requestPermission] = Location.useForegroundPermissions();
-  const [coords, setCoords] = useState<Coords | null>(null);
+  const [coords, setCoords] = useState<Fix | null>(null);
   const granted = status?.granted ?? false;
 
   useEffect(() => {
@@ -40,7 +43,12 @@ export function useLocation({ accuracy = 'balanced' }: Options = {}): LocationSt
         accuracy: high ? Location.Accuracy.High : Location.Accuracy.Balanced,
         distanceInterval: high ? 5 : 50,
       },
-      (location) => setCoords({ lat: location.coords.latitude, lng: location.coords.longitude }),
+      (location) =>
+        setCoords({
+          lat: location.coords.latitude,
+          lng: location.coords.longitude,
+          accuracy: location.coords.accuracy ?? undefined,
+        }),
       // Location services off or no fix yet: keep the last coords (or null) and carry on.
       () => {},
     )

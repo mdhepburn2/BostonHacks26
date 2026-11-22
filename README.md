@@ -18,8 +18,8 @@ Boston is full of places that are easy to walk past without noticing: historic b
 Take a photo of what's in front of you. The app sends the photo together with your **GPS location** and **compass heading**, and the backend works out which place you're looking at:
 
 1. **Find nearby candidates.** It pulls places within about 150 m from Google Places and Wikipedia's geosearch, in parallel, then dedupes them.
-2. **Filter by direction.** It keeps only the places within ±45° of where your phone is pointing, nearest first, so the building behind you doesn't get picked.
-3. **Vision match.** It sends the photo and the numbered shortlist to Gemini, which has to pick from that list and give a confidence score. It isn't allowed to invent a place.
+2. **Filter by direction.** It keeps the places within ±70° of where your phone is pointing, nearest first, so the building behind you doesn't get picked. When GPS is shaky it also keeps the few closest places whichever way they are.
+3. **Vision match.** It sends the photo and the numbered shortlist to Gemini, which has to pick from that list and give a confidence score. It isn't allowed to invent a place. If none fit but Gemini can read a name on a sign, the backend searches Google for that name and accepts a place with that name within 150 m.
 4. **Respond by confidence.** High confidence opens the place card directly. Medium confidence asks *"Is it one of these?"* with the top 3. Low confidence says so and points you to search.
 
 ### 🔎 Search

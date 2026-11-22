@@ -65,6 +65,22 @@ class IdentifyTests(APITestCase):
         )
         self.assertEqual(response.status_code, 200)
 
+    def test_accuracy_is_passed_through(self):
+        with umock.patch('app.views.identify_photo', return_value={'status': 'not_found', 'place': None,
+                                                                   'candidates': [], 'confidence': 0.0}) as fn:
+            response = self.client.post(
+                self.url, {'image': make_image(), 'lat': 42.36, 'lng': -71.05, 'heading': 10, 'accuracy': 32.5},
+                format='multipart',
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(fn.call_args.args[1:], (42.36, -71.05, 10.0, 32.5))
+
+    def test_negative_accuracy_is_400(self):
+        response = self.client.post(
+            self.url, {'image': make_image(), 'lat': 42.36, 'lng': -71.05, 'accuracy': -1}, format='multipart'
+        )
+        self.assertEqual(response.status_code, 400)
+
     def test_missing_image_is_400(self):
         response = self.client.post(self.url, {'lat': 42.36, 'lng': -71.05}, format='multipart')
         self.assertEqual(response.status_code, 400)
@@ -135,9 +151,15 @@ WIKI_RESULTS = [
 class CandidateTests(TestCase):
     lat, lng = 42.3601, -71.0567
 
-    def test_grid_key_rounds_to_three_decimals(self, *_):
-        self.assertEqual(candidates.grid_key(42.35849, -71.05705), '42.358,-71.057')
-        self.assertEqual(candidates.grid_key(-0.0001, 0.0001), '0.000,0.000')
+    def test_grid_key_snaps_to_cell_centers(self, *_):
+        self.assertEqual(candidates.grid_key(42.35849, -71.05705), '42.3585,-71.0570')
+        self.assertEqual(candidates.grid_key(42.34899, -71.09466), '42.3490,-71.0945')
+        self.assertEqual(candidates.grid_key(-0.0001, 0.0001), '0.0000,0.0000')
+
+    def test_cell_center_is_never_far_from_the_user(self, *_):
+        for lat, lng in ((42.34899, -71.09466), (42.35024, -71.09474), (42.36, -71.05725)):
+            center = candidates.snap(lat), candidates.snap(lng)
+            self.assertLess(geo.distance_m(lat, lng, *center), 36)
 
     def test_miss_fetches_dedupes_upserts_and_caches(self, nearby, geo):
         nearby.return_value = GOOGLE_RESULTS
@@ -146,8 +168,8 @@ class CandidateTests(TestCase):
         places = candidates.get_candidates(self.lat, self.lng)
 
         # Searched around the grid cell's center, not the exact point
-        nearby.assert_called_once_with(42.36, -71.057)
-        geo.assert_called_once_with(42.36, -71.057)
+        nearby.assert_called_once_with(42.36, -71.0565)
+        geo.assert_called_once_with(42.36, -71.0565)
         # Faneuil Hall article merged into the Google place; Old State House kept
         self.assertEqual(Place.objects.count(), 3)
         faneuil = Place.objects.get(external_id='g_faneuil')
@@ -156,7 +178,7 @@ class CandidateTests(TestCase):
         self.assertTrue(Place.objects.filter(external_id='wiki:2').exists())
         # Sorted by distance from the user
         self.assertEqual(places[0].external_id, 'g_faneuil')
-        cache = NearbySearchCache.objects.get(grid_key='42.360,-71.057')
+        cache = NearbySearchCache.objects.get(grid_key='42.3600,-71.0565')
         self.assertEqual(cache.places.count(), 3)
 
     def test_hit_skips_external_calls(self, nearby, geo):
@@ -166,7 +188,7 @@ class CandidateTests(TestCase):
         nearby.reset_mock()
         geo.reset_mock()
 
-        places = candidates.get_candidates(self.lat + 0.0002, self.lng)  # same cell
+        places = candidates.get_candidates(self.lat + 0.0001, self.lng)  # same cell
 
         nearby.assert_not_called()
         geo.assert_not_called()
@@ -287,16 +309,17 @@ class HeadingFilterTests(TestCase):
                 self.west, self.north_east, self.right_here]
 
     def test_keeps_places_in_front_sorted_by_distance(self):
-        result = geo.filter_by_heading(self.all(), self.lat, self.lng, heading=0)
+        result = geo.filter_by_heading(self.all(), self.lat, self.lng, heading=0, accuracy=5)
         self.assertEqual(self.names(result), ['right_here', 'north_near', 'north_east', 'north_far'])
 
     def test_wraps_around_north(self):
         result = geo.filter_by_heading([self.north_near, self.east, self.west],
-                                       self.lat, self.lng, heading=350)
+                                       self.lat, self.lng, heading=350, accuracy=5)
         self.assertEqual(self.names(result), ['north_near'])
 
     def test_heading_outside_0_360_is_normalized(self):
-        result = geo.filter_by_heading([self.north_near, self.east], self.lat, self.lng, heading=450)
+        result = geo.filter_by_heading([self.north_near, self.east], self.lat, self.lng, heading=450,
+                                       accuracy=5)
         self.assertEqual(self.names(result), ['east'])
 
     def test_no_heading_returns_all_by_distance(self):
@@ -306,17 +329,38 @@ class HeadingFilterTests(TestCase):
 
     def test_nothing_in_front_falls_back_to_all(self):
         places = [self.south, self.east]
-        result = geo.filter_by_heading(places, self.lat, self.lng, heading=300)
+        result = geo.filter_by_heading(places, self.lat, self.lng, heading=300, accuracy=5)
         self.assertEqual(self.names(result), ['east', 'south'])
 
     def test_capped_at_max(self):
-        places = [pt(f'p{i}', 42.3601 + i * 0.0001, -71.0600) for i in range(12)]
-        result = geo.filter_by_heading(places, self.lat, self.lng, heading=0)
+        places = [pt(f'p{i}', 42.3601 + i * 0.0001, -71.0600) for i in range(geo.MAX_CANDIDATES + 4)]
+        result = geo.filter_by_heading(places, self.lat, self.lng, heading=0, accuracy=5)
         self.assertEqual(len(result), geo.MAX_CANDIDATES)
         self.assertEqual(result[0].name, 'p0')
 
     def test_empty_input(self):
         self.assertEqual(geo.filter_by_heading([], self.lat, self.lng, heading=0), [])
+
+    def test_tolerance_is_wide_enough_for_gps_error(self):
+        # ~60 degrees off: Kenmore, where the shop was 47-70 degrees off the compass
+        off = pt('off', 42.3605, -71.0590)  # bearing ~56
+        result = geo.filter_by_heading([off, self.south], self.lat, self.lng, heading=0, accuracy=5)
+        self.assertEqual(self.names(result), ['off'])
+
+    def test_poor_fix_keeps_closest_whatever_the_heading(self):
+        # Facing north with a 40m fix: the closest places behind and beside are kept too.
+        result = geo.filter_by_heading(self.all(), self.lat, self.lng, heading=0, accuracy=40)
+        self.assertEqual(self.names(result), ['right_here', 'east', 'west', 'north_near', 'north_east',
+                                              'north_far'])
+
+    def test_unknown_accuracy_counts_as_poor(self):
+        result = geo.filter_by_heading([self.south, self.north_far], self.lat, self.lng, heading=0)
+        self.assertEqual(self.names(result), ['south', 'north_far'])
+
+    def test_good_fix_does_not_keep_places_behind(self):
+        result = geo.filter_by_heading([self.south, self.north_far], self.lat, self.lng, heading=0,
+                                       accuracy=geo.POOR_ACCURACY_M)
+        self.assertEqual(self.names(result), ['north_far'])
 
 
 # --- Vision match + identify flow (step 8) --------------------------------
@@ -325,32 +369,36 @@ from .services import identify as identify_service
 from .services import llm
 
 
-def vision_reply(ranked, confidence, place_photo=True, evidence='name on the sign'):
-    return {'photo_shows': 'a storefront', 'is_place_photo': place_photo, 'evidence': evidence,
-            'ranked': ranked, 'confidence': confidence}
+def vision_reply(ranked, confidence, place_photo=True, evidence='name on the sign', sign_text=''):
+    return {'photo_shows': 'a storefront', 'sign_text': sign_text, 'is_place_photo': place_photo,
+            'evidence': evidence, 'ranked': ranked, 'confidence': confidence}
 
 
 class VisionValidationTests(TestCase):
     def test_converts_to_zero_based_and_dedupes(self):
         self.assertEqual(llm._validate_vision(vision_reply([2, 2, 1], 0.8), 3),
-                         {'ranked': [1, 0], 'confidence': 0.8})
+                         {'ranked': [1, 0], 'confidence': 0.8, 'sign_text': ''})
 
     def test_caps_at_three_and_clamps_confidence(self):
         out = llm._validate_vision(vision_reply([1, 2, 3, 4], 1.5), 4)
-        self.assertEqual(out, {'ranked': [0, 1, 2], 'confidence': 1.0})
+        self.assertEqual(out, {'ranked': [0, 1, 2], 'confidence': 1.0, 'sign_text': ''})
 
     def test_empty_ranking_forces_zero_confidence(self):
         self.assertEqual(llm._validate_vision(vision_reply([], 0.9), 3),
-                         {'ranked': [], 'confidence': 0.0})
+                         {'ranked': [], 'confidence': 0.0, 'sign_text': ''})
+
+    def test_keeps_sign_text_when_nothing_is_ranked(self):
+        out = llm._validate_vision(vision_reply([], 0.0, sign_text='  India   Quality '), 3)
+        self.assertEqual(out, {'ranked': [], 'confidence': 0.0, 'sign_text': 'India Quality'})
 
     def test_not_a_place_photo_drops_the_pick(self):
         # e.g. the app's splash logo: the model still guessed a nearby place
-        out = llm._validate_vision(vision_reply([1], 0.8, place_photo=False), 3)
-        self.assertEqual(out, {'ranked': [], 'confidence': 0.0})
+        out = llm._validate_vision(vision_reply([1], 0.8, place_photo=False, sign_text='Venturing'), 3)
+        self.assertEqual(out, {'ranked': [], 'confidence': 0.0, 'sign_text': ''})
 
     def test_no_evidence_caps_confidence_below_matched(self):
         out = llm._validate_vision(vision_reply([1], 0.9, evidence='  '), 3)
-        self.assertEqual(out, {'ranked': [0], 'confidence': llm.NO_EVIDENCE_MAX_CONFIDENCE})
+        self.assertEqual(out, {'ranked': [0], 'confidence': llm.NO_EVIDENCE_MAX_CONFIDENCE, 'sign_text': ''})
         self.assertLess(out['confidence'], identify_service.MATCHED_MIN)
 
     def test_rejects_invented_index(self):
@@ -361,8 +409,9 @@ class VisionValidationTests(TestCase):
     def test_rejects_wrong_shape(self):
         good = vision_reply([1], 0.5)
         bad_replies = [{}, {**good, 'ranked': 1}, {**good, 'confidence': 'high'},
-                       {**good, 'is_place_photo': 'yes'}, {**good, 'evidence': None}]
-        for key in ('ranked', 'confidence', 'is_place_photo', 'evidence'):
+                       {**good, 'is_place_photo': 'yes'}, {**good, 'evidence': None},
+                       {**good, 'sign_text': None}]
+        for key in ('ranked', 'confidence', 'is_place_photo', 'evidence', 'sign_text'):
             bad_replies.append({k: v for k, v in good.items() if k != key})
         for bad in bad_replies:
             with self.assertRaises(ExternalAPIError):
@@ -383,7 +432,7 @@ class VisionValidationTests(TestCase):
         reply = {'candidates': [{'content': {'parts': [{'text': json.dumps(vision_reply([1], 0.75))}]}}]}
         with self.settings(LLM_API_KEY='k'), umock.patch.object(llm, 'request_json', return_value=reply) as req:
             out = llm.match_photo(b'x', [{'name': 'A', 'kind': 'k', 'distance_m': 1, 'direction': 'north'}], 0, 0)
-        self.assertEqual(out, {'ranked': [0], 'confidence': 0.75})
+        self.assertEqual(out, {'ranked': [0], 'confidence': 0.75, 'sign_text': ''})
         body = req.call_args.kwargs['json']
         self.assertEqual(body['generationConfig']['responseMimeType'], 'application/json')
         self.assertIn('1. A', body['contents'][0]['parts'][0]['text'])
@@ -416,8 +465,8 @@ class IdentifyFlowTests(TestCase):
         self.s = mk('s', 'South', 42.3590, -71.0600)     # behind when facing north
         self.all = [self.a, self.b, self.c, self.s]
 
-    def run_identify(self, heading=0):
-        return identify_service.identify(make_image(), self.lat, self.lng, heading)
+    def run_identify(self, heading=0, accuracy=5):
+        return identify_service.identify(make_image(), self.lat, self.lng, heading, accuracy)
 
     def test_matched(self, get_candidates, match):
         get_candidates.return_value = self.all
@@ -472,6 +521,105 @@ class IdentifyFlowTests(TestCase):
         out = self.run_identify()
         self.assertEqual(out, {'status': 'not_found', 'place': None, 'candidates': [], 'confidence': 0.0})
         match.assert_not_called()
+
+
+class NearbySearchRequestTests(TestCase):
+    def test_asks_only_for_photographable_types(self):
+        from .services import google_places
+        with self.settings(GOOGLE_PLACES_KEY='k'), \
+                umock.patch.object(google_places, 'request_json', return_value={'places': []}) as req:
+            google_places.nearby_search(42.36, -71.06)
+        body = req.call_args.kwargs['json']
+        self.assertEqual(body['includedTypes'], google_places.SCAN_TYPES)
+        self.assertLessEqual(len(set(google_places.SCAN_TYPES)), 50)  # Google's limit
+        self.assertEqual(body['rankPreference'], 'DISTANCE')
+
+
+class SignMatchTests(TestCase):
+    def test_matches(self):
+        for sign, name in (('India Quality', 'India Quality Restaurant'), ('CVS', 'CVS Pharmacy'),
+                           ('THE KENMORE', 'The Kenmore'), ('Cafe 472', 'Cafe 472')):
+            self.assertTrue(identify_service.sign_matches(sign, name), (sign, name))
+
+    def test_non_matches(self):
+        for sign, name in (('India Quality', 'Row 34'), ('CVS', 'Walgreens'), ('', 'Anything'),
+                           ('Pizza', 'Kenmore Pizza')):
+            self.assertFalse(identify_service.sign_matches(sign, name), (sign, name))
+
+
+@umock.patch.object(identify_service.google_places, 'text_search')
+@umock.patch.object(identify_service.llm, 'match_photo')
+@umock.patch.object(identify_service.candidate_service, 'get_candidates')
+class SignFallbackTests(TestCase):
+    """Gemini read a name that isn't in the candidate list (the Kenmore / India Quality case)."""
+
+    lat, lng = 42.34899, -71.09466
+
+    def setUp(self):
+        self.row34 = Place.objects.create(external_id='row34', source='google', name='Row 34',
+                                          lat=42.34867, lng=-71.09496)  # ~45m, in front
+        self.india = g('g_india', 'India Quality Restaurant', 42.3485441, -71.0942163)  # ~62m
+
+    def run_identify(self):
+        return identify_service.identify(make_image(), self.lat, self.lng, 214, 30)
+
+    def test_sign_lookup_matches_a_place_missing_from_candidates(self, get_candidates, match, text_search):
+        get_candidates.return_value = [self.row34]
+        match.return_value = {'ranked': [], 'confidence': 0.0, 'sign_text': 'India Quality'}
+        text_search.return_value = [g('g_other', 'Other Place', 42.3486, -71.0943), self.india]
+
+        out = self.run_identify()
+
+        self.assertEqual(out['status'], 'matched')
+        self.assertEqual(out['place']['name'], 'India Quality Restaurant')
+        self.assertEqual(out['confidence'], identify_service.SIGN_MATCH_CONFIDENCE)
+        self.assertTrue(Place.objects.filter(external_id='g_india').exists())
+        self.assertFalse(Place.objects.filter(external_id='g_other').exists())
+        args, kwargs = text_search.call_args
+        self.assertEqual(args, ('India Quality', self.lat, self.lng))
+        self.assertEqual(kwargs['bias_radius'], identify_service.SIGN_SEARCH_BIAS_RADIUS_M)
+
+    def test_sign_overrides_an_unsure_pick(self, get_candidates, match, text_search):
+        get_candidates.return_value = [self.row34]
+        match.return_value = {'ranked': [0], 'confidence': 0.5, 'sign_text': 'India Quality'}
+        text_search.return_value = [self.india]
+        out = self.run_identify()
+        self.assertEqual(out['status'], 'matched')
+        self.assertEqual([c['name'] for c in out['candidates']], ['India Quality Restaurant', 'Row 34'])
+
+    def test_confident_match_skips_the_lookup(self, get_candidates, match, text_search):
+        get_candidates.return_value = [self.row34]
+        match.return_value = {'ranked': [0], 'confidence': 0.9, 'sign_text': 'Row 34'}
+        self.assertEqual(self.run_identify()['place']['id'], self.row34.id)
+        text_search.assert_not_called()
+
+    def test_no_sign_text_skips_the_lookup(self, get_candidates, match, text_search):
+        get_candidates.return_value = [self.row34]
+        match.return_value = {'ranked': [], 'confidence': 0.0, 'sign_text': ''}
+        self.assertEqual(self.run_identify()['status'], 'not_found')
+        text_search.assert_not_called()
+
+    def test_far_away_branch_is_ignored(self, get_candidates, match, text_search):
+        get_candidates.return_value = [self.row34]
+        match.return_value = {'ranked': [], 'confidence': 0.0, 'sign_text': 'India Quality'}
+        text_search.return_value = [g('g_far', 'India Quality Restaurant', 42.3601, -71.0589)]  # downtown
+        out = self.run_identify()
+        self.assertEqual(out['status'], 'not_found')
+        self.assertEqual([c['id'] for c in out['candidates']], [self.row34.id])
+
+    def test_nearby_place_with_another_name_is_ignored(self, get_candidates, match, text_search):
+        get_candidates.return_value = [self.row34]
+        match.return_value = {'ranked': [], 'confidence': 0.0, 'sign_text': 'India Quality'}
+        text_search.return_value = [g('g_x', 'Kenmore Pizza', 42.3486, -71.0943)]
+        self.assertEqual(self.run_identify()['status'], 'not_found')
+
+    def test_lookup_failure_keeps_the_vision_result(self, get_candidates, match, text_search):
+        get_candidates.return_value = [self.row34]
+        match.return_value = {'ranked': [0], 'confidence': 0.5, 'sign_text': 'India Quality'}
+        text_search.side_effect = ExternalAPIError('down')
+        out = self.run_identify()
+        self.assertEqual(out['status'], 'ambiguous')
+        self.assertEqual(out['place']['id'], self.row34.id)
 
 
 # --- Search with caching (step 9) -----------------------------------------

@@ -5,11 +5,17 @@ import math
 EARTH_RADIUS_M = 6_371_000
 
 # Heading filter settings (see filter_by_heading).
-HEADING_TOLERANCE_DEG = 45
-MAX_CANDIDATES = 8
+# Wide on purpose: the bearing is worked out from the GPS fix, and a fix that's
+# 30m off swings the bearing to a shop 50m away by 30 degrees or more.
+HEADING_TOLERANCE_DEG = 70
+MAX_CANDIDATES = 12
 # Places this close are kept whatever the heading: at this range GPS error is
 # about the same size as the distance, so the bearing to them is mostly noise.
 ALWAYS_KEEP_WITHIN_M = 20
+# When the phone reports a fix worse than this (or no accuracy at all), the
+# bearings can't be trusted, so the closest few places are kept whatever the heading.
+POOR_ACCURACY_M = 25
+KEEP_CLOSEST_WHEN_POOR = 3
 
 
 def distance_m(lat1, lng1, lat2, lng2):
@@ -37,12 +43,15 @@ def angle_diff_deg(a, b):
 
 
 def filter_by_heading(places, lat, lng, heading, tolerance=HEADING_TOLERANCE_DEG,
-                      max_results=MAX_CANDIDATES):
+                      max_results=MAX_CANDIDATES, accuracy=None):
     """Narrow scan candidates to the ones the user is facing.
 
     `places` is any iterable of objects with `.lat` and `.lng` (Place rows).
     Keeps places within ±`tolerance` degrees of `heading`, plus anything within
     ALWAYS_KEEP_WITHIN_M, sorted by distance and capped at `max_results`.
+    `accuracy` is the phone's GPS accuracy in meters; when it's worse than
+    POOR_ACCURACY_M, or unknown, the KEEP_CLOSEST_WHEN_POOR closest places are
+    kept too, whichever way they are.
 
     Falls back to all places sorted by distance (same cap) when no heading was
     sent or nothing survives the filter, so the LLM always has something to
@@ -53,9 +62,12 @@ def filter_by_heading(places, lat, lng, heading, tolerance=HEADING_TOLERANCE_DEG
         return by_distance[:max_results]
 
     heading = heading % 360
+    poor_fix = accuracy is None or accuracy > POOR_ACCURACY_M
+    keep_anyway = by_distance[:KEEP_CLOSEST_WHEN_POOR] if poor_fix else []
     facing = [
         p for p in by_distance
-        if distance_m(lat, lng, p.lat, p.lng) <= ALWAYS_KEEP_WITHIN_M
+        if p in keep_anyway
+        or distance_m(lat, lng, p.lat, p.lng) <= ALWAYS_KEEP_WITHIN_M
         or angle_diff_deg(bearing_deg(lat, lng, p.lat, p.lng), heading) <= tolerance
     ]
     return (facing or by_distance)[:max_results]

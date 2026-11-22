@@ -6,7 +6,7 @@
 
 What gets warmed:
 1. Scan spots: the nearby-candidates cache for each spot, plus the 8 grid cells
-   around it (cells are only ~110m x 80m, and GPS drifts).
+   around it (cells are only ~55m x 41m, and GPS drifts).
 2. Searches: the text search cache for each term.
 3. Place cards: details, Wikipedia summary, bio and nearest T stop for the
    closest few places at each spot and the top result of each search.
@@ -23,7 +23,7 @@ import time
 from django.core.management.base import BaseCommand
 
 from app.models import NearbySearchCache, PlaceCard
-from app.services.candidates import get_candidates, grid_key
+from app.services.candidates import CELL, get_candidates, grid_key
 from app.services.http import ExternalAPIError
 from app.services.place_card import get_card
 from app.services.search import search_places
@@ -57,9 +57,6 @@ SEARCHES = [
 
 # Cards to build for each spot: its closest places, since that's what a scan will match.
 CARDS_PER_SPOT = 3
-
-# One grid cell is 0.001 degrees; see candidates.grid_key.
-CELL = 0.001
 
 
 class Command(BaseCommand):

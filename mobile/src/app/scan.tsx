@@ -14,14 +14,14 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ApiError } from '@/api/client';
-import { identify, type Coords, type IdentifyInput } from '@/api/places';
+import { identify, type IdentifyInput } from '@/api/places';
 import type { IdentifyResponse, PlaceSummary } from '@/api/types';
 import { Button } from '@/components/button';
 import { CandidateList } from '@/components/candidate-list';
 import { ThemedText } from '@/components/themed-text';
 import { Fonts, Spacing } from '@/constants/theme';
 import { useHeading } from '@/hooks/use-heading';
-import { useLocation } from '@/hooks/use-location';
+import { useLocation, type Fix } from '@/hooks/use-location';
 import { useTheme } from '@/hooks/use-theme';
 
 /** The API resizes to 1024px anyway, so a smaller upload is just faster. */
@@ -151,7 +151,7 @@ function close() {
 }
 
 /** Live camera with a shutter. Keeps a compass heading so the shot knows which way it faced. */
-function Viewfinder({ coords }: { coords: Coords | null }) {
+function Viewfinder({ coords }: { coords: Fix | null }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const cameraRef = useRef<CameraView>(null);
@@ -211,7 +211,13 @@ function Viewfinder({ coords }: { coords: Coords | null }) {
         shutterSound: false,
       });
       // Grab where we are and which way we're facing at the moment of the shot.
-      void send({ photoUri: photo.uri, lat: coords.lat, lng: coords.lng, heading: heading.current });
+      void send({
+        photoUri: photo.uri,
+        lat: coords.lat,
+        lng: coords.lng,
+        heading: heading.current,
+        accuracy: coords.accuracy,
+      });
     } catch {
       // The camera wasn't ready or was torn down mid-shot; let them try again.
     } finally {

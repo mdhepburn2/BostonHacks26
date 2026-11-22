@@ -20,6 +20,8 @@ class IdentifyInputSerializer(serializers.Serializer):
     lat = serializers.FloatField(min_value=-90, max_value=90)
     lng = serializers.FloatField(min_value=-180, max_value=180)
     heading = serializers.FloatField(min_value=0, max_value=360, required=False, allow_null=True)
+    # GPS horizontal accuracy in meters, as the phone reports it.
+    accuracy = serializers.FloatField(min_value=0, required=False, allow_null=True)
 
     def validate_image(self, image):
         if image.size > MAX_IMAGE_BYTES:

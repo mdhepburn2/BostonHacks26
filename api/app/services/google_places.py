@@ -22,6 +22,29 @@ NEARBY_RADIUS_M = 150
 TEXT_SEARCH_BIAS_RADIUS_M = 5000
 BOSTON_CENTER = (42.3601, -71.0589)
 
+# Nearby search only returns 20 places, closest first. Unfiltered, a dense block
+# fills all 20 with bus stops, short-term rentals, offices and businesses run out
+# of an apartment, and the storefront in the photo gets cut. So scan only asks
+# for things people photograph. A place matches if ANY of its types is listed,
+# and specific types carry their parent (an indian_restaurant is also a
+# restaurant), so broad types cover most of it. Landmarks Google doesn't list
+# still come in through the Wikipedia geosearch. Google allows at most 50.
+SCAN_TYPES = [
+    # Food and drink
+    'restaurant', 'cafe', 'coffee_shop', 'bar', 'pub', 'bakery', 'ice_cream_shop', 'dessert_shop',
+    'fast_food_restaurant', 'sandwich_shop', 'night_club', 'wine_bar', 'tea_house', 'juice_shop',
+    # Shopping
+    'store', 'shopping_mall', 'book_store', 'clothing_store', 'convenience_store', 'grocery_store',
+    'supermarket', 'market', 'gift_shop', 'pharmacy',
+    # Culture, entertainment, landmarks
+    'museum', 'art_gallery', 'tourist_attraction', 'historical_landmark', 'historical_place',
+    'monument', 'cultural_landmark', 'performing_arts_theater', 'movie_theater', 'live_music_venue',
+    'concert_hall', 'comedy_club', 'stadium', 'arena', 'library', 'church', 'park', 'plaza',
+    'university',
+    # Other storefronts
+    'hotel', 'gym', 'hair_salon', 'barber_shop', 'beauty_salon', 'bank',
+]
+
 # Fields for nearby and text search: just enough to build a Place row.
 SEARCH_FIELDS = [
     'places.id',
@@ -101,9 +124,10 @@ def _number(value):
     return float(value)
 
 
-def nearby_search(lat, lng, radius=NEARBY_RADIUS_M, max_results=20):
-    """Places within `radius` meters of (lat, lng), closest first."""
+def nearby_search(lat, lng, radius=NEARBY_RADIUS_M, max_results=20, included_types=SCAN_TYPES):
+    """Places within `radius` meters of (lat, lng), closest first, limited to `included_types`."""
     body = {
+        'includedTypes': list(included_types),
         'locationRestriction': _circle(lat, lng, radius),
         'maxResultCount': max_results,
         'rankPreference': 'DISTANCE',
@@ -115,13 +139,17 @@ def nearby_search(lat, lng, radius=NEARBY_RADIUS_M, max_results=20):
     return _normalize_list(data)
 
 
-def text_search(query, lat=None, lng=None, max_results=10):
-    """Places matching `query`, biased toward (lat, lng) or the center of Boston."""
+def text_search(query, lat=None, lng=None, max_results=10, bias_radius=TEXT_SEARCH_BIAS_RADIUS_M):
+    """Places matching `query`, biased toward (lat, lng) or the center of Boston.
+
+    `bias_radius` is how far around that point to prefer results; the scan
+    flow's sign lookup uses a small one so the nearby branch of a chain wins.
+    """
     if lat is None or lng is None:
         lat, lng = BOSTON_CENTER
     body = {
         'textQuery': query,
-        'locationBias': _circle(lat, lng, TEXT_SEARCH_BIAS_RADIUS_M),
+        'locationBias': _circle(lat, lng, bias_radius),
         'pageSize': max_results,
     }
     data = request_json(

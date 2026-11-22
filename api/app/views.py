@@ -69,7 +69,7 @@ def identify(request):
     data = IdentifyInputSerializer(data=request.data)
     data.is_valid(raise_exception=True)
     v = data.validated_data
-    return Response(identify_photo(v['image'], v['lat'], v['lng'], v.get('heading')))
+    return Response(identify_photo(v['image'], v['lat'], v['lng'], v.get('heading'), v.get('accuracy')))
 
 
 @api_view(['GET'])

@@ -147,7 +147,7 @@ are template code. Replace or delete them as the real screens go in.
 | Method | URL | Purpose |
 |---|---|---|
 | GET | `/api/health/` | Sanity check |
-| POST | `/api/identify/` | Scan. Multipart: `image`, `lat`, `lng`, `heading` (optional) |
+| POST | `/api/identify/` | Scan. Multipart: `image`, `lat`, `lng`, `heading` (optional), `accuracy` (optional, GPS accuracy in meters) |
 | GET | `/api/places/search/?q=&lat=&lng=` | Search by name. lat/lng optional (send both or neither) |
 | GET | `/api/places/<id>/` | Place card |
 
@@ -202,13 +202,14 @@ circles, interest and activities. The full contract is in `../api/CLAUDE.md` und
 1. Ask for camera and location permission the first time the user opens the scan tab. Explain
    why, and handle "denied" with a message and a button to open settings.
 2. While the camera is open, keep a live location and compass heading:
-   - location from `expo-location`, high accuracy
+   - location from `expo-location`, high accuracy. Send its `coords.accuracy` as `accuracy`; with
+     a poor fix the API keeps the closest places whichever way the phone points.
    - heading from `expo-location`'s heading watcher. Send **`trueHeading`** (true north, which
      is what the API's bearing math uses). If it's negative or unavailable, leave `heading` out.
    - Note: the compass needs a real device. Simulators have no heading, and that's fine
      because the API falls back to distance only.
 3. On shutter: take the photo at reduced quality (the API resizes to 1024px anyway, so a smaller
-   upload is faster), grab the current lat/lng/heading, and POST multipart to `/api/identify/`.
+   upload is faster), grab the current lat/lng/heading/accuracy, and POST multipart to `/api/identify/`.
 4. React Native FormData file: `{ uri, name: 'photo.jpg', type: 'image/jpeg' }`. Don't set
    `Content-Type` yourself, because fetch has to add the multipart boundary.
 5. Route on `status` as described above.

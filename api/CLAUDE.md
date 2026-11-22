@@ -62,11 +62,12 @@ Keep everything in the one `app` app. Don't create new Django apps.
 ## How the place flows work
 
 ### Scan flow: `POST /api/identify/`
-1. App sends a photo, lat, lng and an optional compass heading (degrees).
-2. **Candidate generation (cached):** round the coordinates to 3 decimals as a grid key and check `NearbySearchCache`. On a miss, call Google Places Nearby Search and Wikipedia geosearch in parallel, dedupe the results, upsert them as `Place` rows and save the cache entry.
-3. **Heading filter (not cached, runs every request):** keep candidates within ±45° of the user's heading, sorted by distance, max 8. If nothing survives or no heading was sent, fall back to all candidates sorted by distance.
-4. **Vision match (never cached):** resize the photo to ~1024px and send it with the numbered candidate list to a vision LLM. The LLM must return JSON and may only pick from the given candidates.
-5. Map confidence to status: >= 0.7 `matched`, 0.4 to 0.7 `ambiguous` (return top 3), < 0.4 `not_found`.
+1. App sends a photo, lat, lng, an optional compass heading (degrees) and an optional GPS accuracy (meters).
+2. **Candidate generation (cached):** snap the coordinates to a 0.0005° grid (~55m x 41m cells, `candidates.CELL`) as a grid key and check `NearbySearchCache`. On a miss, call Google Places Nearby Search (around the cell center, limited to the photographable types in `google_places.SCAN_TYPES`, since Google only returns the 20 closest) and Wikipedia geosearch in parallel, dedupe the results, upsert them as `Place` rows and save the cache entry. Changing the cell size or the types needs a migration that clears `NearbySearchCache` (like `0008_clear_nearby_cache`).
+3. **Heading filter (not cached, runs every request):** keep candidates within ±70° of the user's heading, sorted by distance, max 12. Places within 20m are always kept, and so are the 3 closest when the GPS accuracy is worse than 25m or unknown. If nothing survives or no heading was sent, fall back to all candidates sorted by distance.
+4. **Vision match (never cached):** resize the photo to ~1024px and send it with the numbered candidate list to a vision LLM. The LLM must return JSON and may only pick from the given candidates. It also returns `sign_text`, the name it reads on a sign.
+5. **Sign lookup (never cached):** if the match isn't `matched` and there's sign text, run a Google text search for it biased tightly around the user. A result whose name matches the sign and is within 150m becomes the match (confidence 0.8). If the lookup fails, keep the vision result.
+6. Map confidence to status: >= 0.7 `matched`, 0.4 to 0.7 `ambiguous` (return top 3), < 0.4 `not_found`.
 
 ### Search flow: `GET /api/places/search/?q=&lat=&lng=`
 1. Normalize the query (lowercase, trimmed, collapsed spaces) and check `TextSearchCache`.
@@ -103,7 +104,7 @@ All in `app/models.py`. Use Django's built-in `User` model for accounts.
 
 ### Place data (Phase 1)
 - **Place:** `external_id` (unique; Google place_id or Wikipedia pageid), `source` (google/wiki), `name`, `address`, `lat`, `lng`, `types` (JSON), `raw_data` (JSON), `wiki_title`, `wiki_summary`, `rating` (nullable float), `rating_count` (nullable int), `price_level` (nullable string), `opening_hours` (JSON list of weekday strings, nullable), `details_fetched_at` (nullable datetime), `updated_at`. Always upsert by `external_id` and never create duplicates.
-- **NearbySearchCache:** `grid_key` (unique, e.g. "42.358,-71.057"), many-to-many to Place, `created_at`.
+- **NearbySearchCache:** `grid_key` (unique, e.g. "42.3580,-71.0575"), many-to-many to Place, `created_at`.
 - **TextSearchCache:** `query` (unique, normalized), many-to-many to Place, `created_at`.
 - **PlaceCard:** one-to-one with Place, `bio` (text), `nearest_t` (JSON), `created_at`.
 - **IdentifyLog** (optional): photo, coordinates, heading, result JSON, `created_at`. For debugging and demos.
@@ -140,7 +141,7 @@ Don't change these shapes without telling the frontend team. All URLs are under 
 | Method | URL | Purpose |
 |---|---|---|
 | GET | `/api/health/` | Sanity check |
-| POST | `/api/identify/` | Scan. Multipart: `image`, `lat`, `lng`, `heading` (optional) |
+| POST | `/api/identify/` | Scan. Multipart: `image`, `lat`, `lng`, `heading` (optional), `accuracy` (optional, GPS accuracy in meters) |
 | GET | `/api/places/search/?q=&lat=&lng=` | Search by name. lat/lng optional |
 | GET | `/api/places/<id>/` | Place card |
 

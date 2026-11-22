@@ -35,17 +35,20 @@ The image may not show any of these places, or may not be a photo of a place at 
 correct answer. Work through these fields in order:
 
 1. "photo_shows": one short sentence describing only what is literally visible.
-2. "is_place_photo": true only if this is a camera photo of a real-world scene: a building,
+2. "sign_text": the place's name exactly as it is written on a sign, awning or window in the
+   photo, even if it is not one of the places listed. Only the name, not slogans, opening
+   hours or what it sells. Leave it empty if no name is readable.
+3. "is_place_photo": true only if this is a camera photo of a real-world scene: a building,
    storefront, street, landmark, statue, park or a room inside a venue. false for logos,
    icons, app or splash screens, screenshots, drawings, graphics, documents, close-ups of a
    single object, and blank, dark or unreadably blurry images.
-3. "evidence": the specific thing in the photo that ties it to your first pick, such as the
+4. "evidence": the specific thing in the photo that ties it to your first pick, such as the
    place's name on a sign, or a building or statue that clearly fits its type. Leave it
    empty if there is nothing like that.
-4. "ranked": up to 3 numbers from the list above, best match first. Leave it empty if
+5. "ranked": up to 3 numbers from the list above, best match first. Leave it empty if
    "is_place_photo" is false or nothing in the photo points to any of them. Never pick a
    place just because it is the closest, or because a shape or colour vaguely resembles it.
-5. "confidence": how sure you are (0 to 1) that the FIRST number in "ranked" is what the
+6. "confidence": how sure you are (0 to 1) that the FIRST number in "ranked" is what the
    photo shows. Use 0 if "ranked" is empty. Only go above 0.7 when the evidence is specific
    (a readable name, or a distinctive landmark). If you are guessing, stay below 0.4.
 
@@ -58,14 +61,15 @@ VISION_SCHEMA = {
     'type': 'OBJECT',
     'properties': {
         'photo_shows': {'type': 'STRING'},
+        'sign_text': {'type': 'STRING'},
         'is_place_photo': {'type': 'BOOLEAN'},
         'evidence': {'type': 'STRING'},
         'ranked': {'type': 'ARRAY', 'items': {'type': 'INTEGER'}},
         'confidence': {'type': 'NUMBER'},
     },
-    'required': ['photo_shows', 'is_place_photo', 'evidence', 'ranked', 'confidence'],
+    'required': ['photo_shows', 'sign_text', 'is_place_photo', 'evidence', 'ranked', 'confidence'],
     # Gemini fills fields in this order, so it describes the image before it picks.
-    'propertyOrdering': ['photo_shows', 'is_place_photo', 'evidence', 'ranked', 'confidence'],
+    'propertyOrdering': ['photo_shows', 'sign_text', 'is_place_photo', 'evidence', 'ranked', 'confidence'],
 }
 # Without any stated evidence the pick is a guess, so it can be "ambiguous" at most.
 NO_EVIDENCE_MAX_CONFIDENCE = 0.5
@@ -108,7 +112,8 @@ def match_photo(image_bytes, candidates, lat, lng, heading=None):
 
     `candidates` is a list of dicts with `name`, `kind`, `distance_m` and
     `direction` (built by the caller). Returns {"ranked": [0-based indices],
-    "confidence": float}.
+    "confidence": float, "sign_text": str}. `sign_text` is the name Gemini read
+    on a sign ('' if none), so the caller can look it up when it isn't listed.
     """
     if not candidates:
         raise ExternalAPIError('no candidates to match against')
@@ -136,9 +141,10 @@ def _validate_vision(data, n_candidates):
     confidence = data.get('confidence')
     is_place_photo = data.get('is_place_photo')
     evidence = data.get('evidence')
+    sign_text = data.get('sign_text')
     if (not isinstance(ranked, list) or isinstance(confidence, bool)
             or not isinstance(confidence, (int, float)) or not isinstance(is_place_photo, bool)
-            or not isinstance(evidence, str)):
+            or not isinstance(evidence, str) or not isinstance(sign_text, str)):
         raise ExternalAPIError(f'gemini.vision returned an unexpected shape: {data!r}')
 
     indices = []
@@ -148,18 +154,19 @@ def _validate_vision(data, n_candidates):
         if n - 1 not in indices:
             indices.append(n - 1)
 
-    logger.info('gemini.vision: shows=%r place_photo=%s evidence=%r ranked=%s confidence=%s',
-                data.get('photo_shows'), is_place_photo, evidence, ranked, confidence)
+    logger.info('gemini.vision: shows=%r sign=%r place_photo=%s evidence=%r ranked=%s confidence=%s',
+                data.get('photo_shows'), sign_text, is_place_photo, evidence, ranked, confidence)
 
     confidence = min(max(float(confidence), 0.0), 1.0)
     if not is_place_photo:
         # A logo, screenshot or blank frame: whatever it ranked is a guess.
         indices = []
+        sign_text = ''
     if not evidence.strip():
         confidence = min(confidence, NO_EVIDENCE_MAX_CONFIDENCE)
     if not indices:
         confidence = 0.0
-    return {'ranked': indices[:3], 'confidence': confidence}
+    return {'ranked': indices[:3], 'confidence': confidence, 'sign_text': ' '.join(sign_text.split())}
 
 
 def write_bio(facts):
