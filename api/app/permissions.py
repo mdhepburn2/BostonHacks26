@@ -16,7 +16,7 @@ their visibility (`visible_*`):
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 
-from .models import Circle, CircleMembership, Friendship, PlaceInterest, SavedPlace, Tag, Visibility
+from .models import Activity, ActivityResponse, Circle, CircleMembership, Friendship, PlaceInterest, SavedPlace, Tag, Visibility
 
 
 def own_saved_places(user):
@@ -140,3 +140,20 @@ def friends_interested_count(user, place):
 def saved_place_for_interest(user, saved_place_id):
     """Someone else's saved place that `user` can see and so may mark interest from, else None."""
     return visible_saved_places(user).exclude(user=user).filter(pk=saved_place_id).first()
+
+
+# --- Activities (Phase 3) -------------------------------------------------
+
+def visible_activities(viewer):
+    """Every activity `viewer` is allowed to see, going by each one's own visibility."""
+    return Activity.objects.filter(_visible_q(viewer, 'author'))
+
+
+def is_activity_author(user, activity):
+    """Only the author can edit or delete an activity."""
+    return activity.author_id == user.pk
+
+
+def own_responses(user):
+    """The user's own replies to activities, which only they can add, change or remove."""
+    return ActivityResponse.objects.filter(user=user)

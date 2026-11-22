@@ -222,3 +222,51 @@ class PlaceInterest(models.Model):
 
     def __str__(self):
         return f'{self.user} interested in {self.place}'
+
+
+class Activity(models.Model):
+    """A plan posted at a place ("Brunch at Faneuil Hall, Sat 11am") that others reply to.
+
+    Uses the shared Visibility choices except `private` (there'd be no one to reply).
+    Visibility checks go through app/permissions.py.
+    """
+
+    VISIBILITY_CHOICES = [c for c in Visibility.choices if c[0] != Visibility.PRIVATE]
+
+    author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='activities')
+    place = models.ForeignKey(Place, on_delete=models.CASCADE, related_name='activities')
+    title = models.CharField(max_length=120)
+    description = models.TextField(blank=True)
+    starts_at = models.DateTimeField()
+    visibility = models.CharField(max_length=10, choices=VISIBILITY_CHOICES, default=Visibility.FRIENDS)
+    # Required when visibility is "circle". If the circle is deleted this becomes
+    # null and only the author can see it.
+    circle = models.ForeignKey(Circle, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['starts_at', 'id']
+        verbose_name_plural = 'activities'
+
+    def __str__(self):
+        return self.title
+
+
+class ActivityResponse(models.Model):
+    """Someone replying "interested" or "going" to an activity. One reply per person, changeable."""
+
+    STATUS_INTERESTED = 'interested'
+    STATUS_GOING = 'going'
+    STATUS_CHOICES = [(STATUS_INTERESTED, 'Interested'), (STATUS_GOING, 'Going')]
+
+    activity = models.ForeignKey(Activity, on_delete=models.CASCADE, related_name='responses')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='activity_responses')
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['activity', 'user'], name='unique_activity_response')]
+
+    def __str__(self):
+        return f'{self.user} {self.status} for {self.activity}'

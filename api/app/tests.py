@@ -1825,3 +1825,193 @@ class CircleTests(LoggedInTestCase):
                                                     'circle_id': circle_id})
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()['circle_id'], circle_id)
+
+
+# --- Activities (step 21) -------------------------------------------------
+
+from .models import Activity, ActivityResponse
+
+ACTIVITY_KEYS = {'id', 'author', 'place', 'title', 'description', 'starts_at', 'visibility', 'circle_id',
+                 'counts', 'my_response'}
+
+
+class ActivityTests(LoggedInTestCase):
+    """"matt" (self.user) is logged in and friends with "sam" (self.other). "stranger" isn't a friend."""
+
+    def setUp(self):
+        super().setUp()
+        Friendship.objects.create(from_user=self.user, to_user=self.other, status=Friendship.STATUS_ACCEPTED)
+        self.stranger = User.objects.create_user('stranger')
+        self.soon = timezone.now() + datetime.timedelta(days=1)
+
+    def make(self, author, visibility='friends', circle=None, starts_at=None, title='Brunch'):
+        return Activity.objects.create(author=author, place=self.place, title=title, visibility=visibility,
+                                       circle=circle, starts_at=starts_at or self.soon)
+
+    def post(self, **body):
+        data = {'place_id': self.place.id, 'title': 'Brunch', 'starts_at': self.soon.isoformat(), **body}
+        return self.client.post('/api/activities/', data, format='json')
+
+    def url(self, activity, *rest):
+        return '/'.join([f'/api/activities/{activity.id}', *rest, ''])
+
+    def feed_ids(self):
+        return [a['id'] for a in self.client.get('/api/activities/').json()['results']]
+
+    def as_user(self, user):
+        self.client.force_authenticate(user)
+
+    # --- posting ---
+
+    def test_post_returns_shape(self):
+        response = self.post(description='bring cash')
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(set(body), ACTIVITY_KEYS)
+        self.assertEqual(body['author'], {'id': self.user.id, 'username': 'matt'})
+        self.assertEqual(set(body['place']), SHORT_PLACE_KEYS)
+        self.assertEqual(body['visibility'], 'friends')  # the default
+        self.assertEqual(body['counts'], {'interested': 0, 'going': 0})
+        self.assertIsNone(body['my_response'])
+
+    def test_cant_be_private(self):
+        response = self.post(visibility='private')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('visibility', response.json())
+        self.assertFalse(Activity.objects.exists())
+
+    def test_bad_input(self):
+        self.assertEqual(self.post(title='   ').status_code, 400)
+        self.assertEqual(self.post(place_id=9999).status_code, 400)
+        past = (timezone.now() - datetime.timedelta(hours=1)).isoformat()
+        self.assertEqual(self.post(starts_at=past).status_code, 400)
+        self.assertEqual(self.client.post('/api/activities/', {}, format='json').status_code, 400)
+        self.assertFalse(Activity.objects.exists())
+
+    def test_circle_visibility_needs_my_circle(self):
+        self.assertEqual(self.post(visibility='circle').status_code, 400)
+        theirs = self.make_circle(self.other)
+        self.assertEqual(self.post(visibility='circle', circle_id=theirs.id).status_code, 400)
+        mine = self.make_circle(self.user)
+        response = self.post(visibility='circle', circle_id=mine.id)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()['circle_id'], mine.id)
+
+    def test_other_visibility_clears_circle(self):
+        circle = self.make_circle(self.user)
+        self.assertIsNone(self.post(visibility='public', circle_id=circle.id).json()['circle_id'])
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get('/api/activities/').status_code, 401)
+        self.assertEqual(self.post().status_code, 401)
+
+    # --- who sees what ---
+
+    def test_feed_visibility(self):
+        mine = self.make(self.user)
+        friends = self.make(self.other, 'friends')
+        public = self.make(self.stranger, 'public')
+        self.make(self.stranger, 'friends')  # not my friend
+        circle = self.make_circle(self.other, self.user)
+        in_circle = self.make(self.other, 'circle', circle)
+        other_circle = self.make_circle(self.other)
+        self.make(self.other, 'circle', other_circle)  # I'm not in it
+        self.assertEqual(set(self.feed_ids()), {mine.id, friends.id, public.id, in_circle.id})
+
+    def test_hidden_activity_is_404_everywhere(self):
+        hidden = self.make(self.stranger, 'friends')
+        self.assertEqual(self.client.get(self.url(hidden)).status_code, 404)
+        self.assertEqual(self.client.patch(self.url(hidden), {'title': 'x'}).status_code, 404)
+        self.assertEqual(self.client.delete(self.url(hidden)).status_code, 404)
+        self.assertEqual(self.client.post(self.url(hidden, 'respond'), {'status': 'going'}).status_code, 404)
+        self.assertEqual(self.client.delete(self.url(hidden, 'respond')).status_code, 404)
+        self.assertEqual(self.client.get('/api/activities/9999/').status_code, 404)
+
+    def test_unfriending_hides_straight_away(self):
+        theirs = self.make(self.other, 'friends')
+        self.assertIn(theirs.id, self.feed_ids())
+        self.client.delete(f'/api/friends/{self.other.id}/')
+        self.assertNotIn(theirs.id, self.feed_ids())
+
+    def test_deleted_circle_makes_it_author_only(self):
+        circle = self.make_circle(self.other, self.user)
+        theirs = self.make(self.other, 'circle', circle)
+        circle.delete()
+        self.assertNotIn(theirs.id, self.feed_ids())
+        self.as_user(self.other)
+        self.assertIn(theirs.id, self.feed_ids())
+
+    def test_feed_order_upcoming_first(self):
+        now = timezone.now()
+        later = self.make(self.user, starts_at=now + datetime.timedelta(days=3))
+        sooner = self.make(self.user, starts_at=now + datetime.timedelta(days=1))
+        old = self.make(self.user, starts_at=now - datetime.timedelta(days=5))
+        recent = self.make(self.user, starts_at=now - datetime.timedelta(days=1))
+        self.assertEqual(self.feed_ids(), [sooner.id, later.id, recent.id, old.id])
+
+    # --- editing ---
+
+    def test_author_edits(self):
+        mine = self.make(self.user)
+        response = self.client.patch(self.url(mine), {'title': 'Lunch', 'visibility': 'public'}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['title'], 'Lunch')
+        self.assertEqual(response.json()['visibility'], 'public')
+        self.assertEqual(self.client.patch(self.url(mine), {'visibility': 'private'}).status_code, 400)
+
+    def test_editing_a_past_activity_without_touching_the_time(self):
+        mine = self.make(self.user, starts_at=timezone.now() - datetime.timedelta(days=1))
+        self.assertEqual(self.client.patch(self.url(mine), {'description': 'was fun'}).status_code, 200)
+
+    def test_others_cant_edit_or_delete(self):
+        theirs = self.make(self.other, 'friends')
+        self.assertEqual(self.client.get(self.url(theirs)).status_code, 200)
+        self.assertEqual(self.client.patch(self.url(theirs), {'title': 'x'}).status_code, 403)
+        self.assertEqual(self.client.delete(self.url(theirs)).status_code, 403)
+        theirs.refresh_from_db()
+        self.assertEqual(theirs.title, 'Brunch')
+
+    def test_author_deletes(self):
+        mine = self.make(self.user)
+        ActivityResponse.objects.create(activity=mine, user=self.other, status='going')
+        self.assertEqual(self.client.delete(self.url(mine)).status_code, 204)
+        self.assertFalse(Activity.objects.exists())
+        self.assertFalse(ActivityResponse.objects.exists())
+
+    # --- responding ---
+
+    def test_respond_and_change_and_remove(self):
+        theirs = self.make(self.other, 'friends')
+        response = self.client.post(self.url(theirs, 'respond'), {'status': 'interested'})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()['my_response'], 'interested')
+        self.assertEqual(response.json()['counts'], {'interested': 1, 'going': 0})
+
+        response = self.client.post(self.url(theirs, 'respond'), {'status': 'going'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['my_response'], 'going')
+        self.assertEqual(response.json()['counts'], {'interested': 0, 'going': 1})
+        self.assertEqual(ActivityResponse.objects.count(), 1)
+
+        self.assertEqual(self.client.delete(self.url(theirs, 'respond')).status_code, 204)
+        self.assertEqual(self.client.delete(self.url(theirs, 'respond')).status_code, 204)
+        body = self.client.get(self.url(theirs)).json()
+        self.assertIsNone(body['my_response'])
+        self.assertEqual(body['counts'], {'interested': 0, 'going': 0})
+
+    def test_bad_status(self):
+        theirs = self.make(self.other, 'friends')
+        self.assertEqual(self.client.post(self.url(theirs, 'respond'), {'status': 'maybe'}).status_code, 400)
+        self.assertEqual(self.client.post(self.url(theirs, 'respond'), {}).status_code, 400)
+
+    def test_counts_and_my_response_in_feed(self):
+        public = self.make(self.stranger, 'public')
+        ActivityResponse.objects.create(activity=public, user=self.other, status='going')
+        ActivityResponse.objects.create(activity=public, user=self.stranger, status='going')
+        ActivityResponse.objects.create(activity=public, user=self.user, status='interested')
+        item = self.client.get('/api/activities/').json()['results'][0]
+        self.assertEqual(item['counts'], {'interested': 1, 'going': 2})
+        self.assertEqual(item['my_response'], 'interested')
+        self.as_user(self.other)
+        self.assertEqual(self.client.get('/api/activities/').json()['results'][0]['my_response'], 'going')

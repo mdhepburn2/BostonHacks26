@@ -4,7 +4,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from . import permissions
-from .models import Circle, CircleMembership, Friendship, Place, SavedPlace, Tag, Visibility
+from .models import Activity, ActivityResponse, Circle, CircleMembership, Friendship, Place, SavedPlace, Tag, Visibility
 
 User = get_user_model()
 
@@ -296,3 +296,62 @@ class CircleMemberInputSerializer(serializers.Serializer):
     """Body for POST /api/circles/<id>/members/."""
 
     user_id = serializers.IntegerField()
+
+
+# --- Activities (Phase 3) -------------------------------------------------
+
+class ActivitySerializer(serializers.ModelSerializer):
+    """Activity shape, and the body for POST /api/activities/ and PATCH /api/activities/<id>/.
+
+    `counts` and `my_response` come from annotations added by the view.
+    """
+
+    author = UserShortSerializer(read_only=True)
+    place = PlaceShortSerializer(read_only=True)
+    place_id = serializers.PrimaryKeyRelatedField(
+        queryset=Place.objects.all(), source='place', write_only=True,
+        error_messages={'does_not_exist': 'Place not found.', 'incorrect_type': 'place_id must be a number.'},
+    )
+    title = serializers.CharField(max_length=120, trim_whitespace=True)
+    description = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    visibility = serializers.ChoiceField(
+        choices=Activity.VISIBILITY_CHOICES, required=False,
+        error_messages={'invalid_choice': 'Activities can be shared with friends, a circle or everyone.'},
+    )
+    circle_id = serializers.IntegerField(required=False, allow_null=True)
+    counts = serializers.SerializerMethodField()
+    my_response = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Activity
+        fields = ['id', 'author', 'place', 'place_id', 'title', 'description', 'starts_at', 'visibility',
+                  'circle_id', 'counts', 'my_response']
+        read_only_fields = ['id']
+
+    def get_counts(self, obj):
+        return {'interested': getattr(obj, 'interested_count', 0), 'going': getattr(obj, 'going_count', 0)}
+
+    def get_my_response(self, obj):
+        return getattr(obj, 'my_response', None)
+
+    def validate_title(self, title):
+        title = ' '.join(title.split())
+        if not title:
+            raise serializers.ValidationError('Give the activity a title.')
+        return title
+
+    def validate_starts_at(self, value):
+        if value < timezone.now():
+            raise serializers.ValidationError("The start time can't be in the past.")
+        return value
+
+    def validate(self, attrs):
+        if self.instance is None and 'visibility' not in attrs:
+            attrs['visibility'] = Visibility.FRIENDS
+        return resolve_visibility(attrs, self.instance, self.context['request'].user)
+
+
+class ActivityResponseInputSerializer(serializers.Serializer):
+    """Body for POST /api/activities/<id>/respond/."""
+
+    status = serializers.ChoiceField(choices=ActivityResponse.STATUS_CHOICES)

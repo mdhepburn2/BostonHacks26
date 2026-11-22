@@ -2,7 +2,7 @@ import logging
 
 from django.contrib.auth import authenticate, get_user_model
 from django.db import IntegrityError, transaction
-from django.db.models import Count
+from django.db.models import Case, Count, F, OuterRef, Q, Subquery, Value, When
 from django.http import JsonResponse
 from django.utils import timezone
 from rest_framework import status
@@ -14,11 +14,12 @@ from rest_framework.response import Response
 from rest_framework.views import exception_handler as drf_exception_handler
 
 from . import permissions
-from .models import CircleMembership, Friendship, Place, PlaceInterest
-from .serializers import (CircleMemberInputSerializer, CircleSerializer, FriendRequestInputSerializer,
-                          FriendRequestSerializer, IdentifyInputSerializer, LoginSerializer,
-                          PlaceInterestInputSerializer, RegisterSerializer, SavedPlaceSerializer,
-                          SearchInputSerializer, TagSerializer, UserSerializer, UserShortSerializer)
+from .models import ActivityResponse, CircleMembership, Friendship, Place, PlaceInterest
+from .serializers import (ActivityResponseInputSerializer, ActivitySerializer, CircleMemberInputSerializer,
+                          CircleSerializer, FriendRequestInputSerializer, FriendRequestSerializer,
+                          IdentifyInputSerializer, LoginSerializer, PlaceInterestInputSerializer,
+                          RegisterSerializer, SavedPlaceSerializer, SearchInputSerializer, TagSerializer,
+                          UserSerializer, UserShortSerializer)
 from .services.http import ExternalAPIError
 from .services.identify import identify as identify_photo
 from .services.place_card import get_card
@@ -466,3 +467,86 @@ def circle_member_detail(request, circle_id, user_id):
         return _owner_only()
     membership.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# --- Activities (Phase 3) -------------------------------------------------
+
+def _activities(user):
+    """Activities the user can see, with reply counts and their own reply attached."""
+    mine = permissions.own_responses(user).filter(activity=OuterRef('pk')).values('status')[:1]
+    return permissions.visible_activities(user).select_related('author', 'place').annotate(
+        interested_count=Count('responses', filter=Q(responses__status=ActivityResponse.STATUS_INTERESTED)),
+        going_count=Count('responses', filter=Q(responses__status=ActivityResponse.STATUS_GOING)),
+        my_response=Subquery(mine),
+    )
+
+
+def _activity_response(user, activity_id, status_code=status.HTTP_200_OK):
+    return Response(ActivitySerializer(_activities(user).get(pk=activity_id)).data, status=status_code)
+
+
+def _activity_not_found():
+    return Response({'detail': 'Activity not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['GET', 'POST'])
+def activities(request):
+    """The feed: upcoming activities soonest first, then past ones most recent first."""
+    if request.method == 'GET':
+        now = timezone.now()
+        feed = _activities(request.user).annotate(
+            is_past=Case(When(starts_at__lt=now, then=Value(1)), default=Value(0)),
+            upcoming_at=Case(When(starts_at__gte=now, then=F('starts_at')), default=None),
+        ).order_by('is_past', F('upcoming_at').asc(nulls_last=True), '-starts_at', 'id')
+        return Response({'results': ActivitySerializer(feed, many=True).data})
+
+    data = ActivitySerializer(data=request.data, context={'request': request})
+    data.is_valid(raise_exception=True)
+    activity = data.save(author=request.user)
+    return _activity_response(request.user, activity.pk, status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+def activity_detail(request, activity_id):
+    # Anyone who can see it can view it; anyone else gets 404 so ids can't be guessed.
+    activity = _activities(request.user).filter(pk=activity_id).first()
+    if activity is None:
+        return _activity_not_found()
+    if request.method == 'GET':
+        return Response(ActivitySerializer(activity).data)
+    if not permissions.is_activity_author(request.user, activity):
+        return Response({'detail': 'Only the person who posted this can do that.'},
+                        status=status.HTTP_403_FORBIDDEN)
+    if request.method == 'DELETE':
+        activity.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    data = ActivitySerializer(activity, data=request.data, partial=True, context={'request': request})
+    data.is_valid(raise_exception=True)
+    data.save()
+    return _activity_response(request.user, activity.pk)
+
+
+@api_view(['POST', 'DELETE'])
+def respond_to_activity(request, activity_id):
+    """Reply interested / going (replying again changes it), or remove my reply."""
+    activity = permissions.visible_activities(request.user).filter(pk=activity_id).first()
+    if activity is None:
+        return _activity_not_found()
+    mine = permissions.own_responses(request.user).filter(activity=activity)
+
+    if request.method == 'DELETE':
+        mine.delete()  # removing a reply that isn't there is fine
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    data = ActivityResponseInputSerializer(data=request.data)
+    data.is_valid(raise_exception=True)
+    try:
+        with transaction.atomic():
+            _, created = ActivityResponse.objects.update_or_create(
+                activity=activity, user=request.user, defaults={'status': data.validated_data['status']})
+    except IntegrityError:  # a double tap created it in between
+        mine.update(status=data.validated_data['status'], updated_at=timezone.now())
+        created = False
+    return _activity_response(request.user, activity.pk,
+                              status.HTTP_201_CREATED if created else status.HTTP_200_OK)

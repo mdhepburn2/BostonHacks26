@@ -29,4 +29,7 @@ urlpatterns = [
     path('circles/<int:circle_id>/', views.circle_detail, name='circle-detail'),
     path('circles/<int:circle_id>/members/', views.circle_members, name='circle-members'),
     path('circles/<int:circle_id>/members/<int:user_id>/', views.circle_member_detail, name='circle-member-detail'),
+    path('activities/', views.activities, name='activities'),
+    path('activities/<int:activity_id>/', views.activity_detail, name='activity-detail'),
+    path('activities/<int:activity_id>/respond/', views.respond_to_activity, name='activity-respond'),
 ]

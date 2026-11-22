@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import (Circle, CircleMembership, Friendship, NearbySearchCache, Place, PlaceCard, PlaceInterest,
+from .models import (Activity, ActivityResponse, Circle, CircleMembership, Friendship, NearbySearchCache, Place, PlaceCard, PlaceInterest,
                      SavedPlace, Tag, TextSearchCache)
 
 
@@ -76,3 +76,18 @@ class PlaceInterestAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'place__name')
     list_select_related = ('user', 'place')
     raw_id_fields = ('place', 'via_saved_place')
+
+
+class ActivityResponseInline(admin.TabularInline):
+    model = ActivityResponse
+    extra = 0
+
+
+@admin.register(Activity)
+class ActivityAdmin(admin.ModelAdmin):
+    list_display = ('title', 'author', 'place', 'starts_at', 'visibility', 'created_at')
+    list_filter = ('visibility',)
+    search_fields = ('title', 'author__username', 'place__name')
+    list_select_related = ('author', 'place')
+    raw_id_fields = ('place',)
+    inlines = [ActivityResponseInline]

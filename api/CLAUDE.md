@@ -307,6 +307,15 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 ```
 `members` lists the owner first, then everyone else in the order they joined.
 
+**Activities:**
+- `GET /api/activities/` returns `{"results": [<activity shape>]}`: every activity I'm allowed to see (mine included), upcoming ones soonest first, then past ones most recent first.
+- `POST /api/activities/` body: `place_id`, `title` (trimmed, 1 to 120 characters), `starts_at` (ISO datetime, not in the past), optional `description`, `visibility` (default `friends`) and `circle_id`. Returns 201. `private` is rejected (400).
+- `visibility: "circle"` needs a `circle_id` for a circle I belong to, the same as saved places. A `circle` activity whose circle was deleted is author-only.
+- Activities I can't see are 404 for every activity endpoint. Anyone who can see one can view and reply to it; edit and delete are author-only (403 for everyone else). A PATCH that sends `starts_at` can't move it into the past.
+- `POST /api/activities/<id>/respond/` body: `status` (`interested` or `going`). Returns the activity shape: 201 for a first reply, 200 when it changes or repeats one. Each person has one reply.
+- `DELETE /api/activities/<id>/respond/` returns 204, including when I hadn't replied. Deleting an activity deletes its replies.
+- Visibility is checked live through `visible_activities(viewer)` in `app/permissions.py` (with `is_activity_author` and `own_responses`). `counts` includes every reply, and `my_response` is mine.
+
 **Friend request shape:**
 ```json
 {
