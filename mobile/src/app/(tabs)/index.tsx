@@ -1,9 +1,11 @@
 import { router } from 'expo-router';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
+import { getActivities } from '@/api/activities';
 import { getSaved } from '@/api/saved';
 import { getFeed } from '@/api/social';
-import type { FeedResponse, SavedListResponse } from '@/api/types';
+import type { ActivitiesResponse, FeedResponse, SavedListResponse } from '@/api/types';
+import { ActivityRow } from '@/components/activity-row';
 import { Button } from '@/components/button';
 import { Crosswalk } from '@/components/crosswalk';
 import { EmptyState } from '@/components/empty-state';
@@ -14,21 +16,26 @@ import { ScanButton } from '@/components/scan-button';
 import { Screen } from '@/components/screen';
 import { Section } from '@/components/section';
 import { SignInPrompt } from '@/components/sign-in-prompt';
+import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { type RequestState, useRefreshOnFocus, useRequest } from '@/hooks/use-request';
+import { isPast } from '@/utils/dates';
 
 const RECENT_COUNT = 5;
 const FEED_COUNT = 20;
+const PLANS_COUNT = 3;
 
 export default function HomeScreen() {
   const { status, user } = useAuth();
   const signedIn = status === 'signedIn' && user !== null;
   const recent = useRequest(signedIn ? `home-saved:${user.id}` : null, () => getSaved());
   const feed = useRequest(signedIn ? `home-feed:${user.id}` : null, () => getFeed(FEED_COUNT));
+  const plans = useRequest(signedIn ? `home-plans:${user.id}` : null, getActivities);
   const refresh = () => {
     recent.refresh();
     feed.refresh();
+    plans.refresh();
   };
   useRefreshOnFocus(refresh);
 
@@ -36,12 +43,12 @@ export default function HomeScreen() {
     <Screen
       title="Home"
       subtitle="Explore Boston on foot"
-      refreshing={recent.refreshing || feed.refreshing}
+      refreshing={recent.refreshing || feed.refreshing || plans.refreshing}
       onRefresh={signedIn ? refresh : undefined}>
       <ScanButton />
       <Crosswalk />
       {signedIn ? (
-        <SignedInHome recent={recent} feed={feed} />
+        <SignedInHome recent={recent} feed={feed} plans={plans} myId={user.id} />
       ) : status === 'signedOut' ? (
         <SignInPrompt
           accent="yellow"
@@ -57,9 +64,11 @@ export default function HomeScreen() {
 type SignedInHomeProps = {
   recent: RequestState<SavedListResponse>;
   feed: RequestState<FeedResponse>;
+  plans: RequestState<ActivitiesResponse>;
+  myId: number;
 };
 
-function SignedInHome({ recent, feed }: SignedInHomeProps) {
+function SignedInHome({ recent, feed, plans, myId }: SignedInHomeProps) {
   return (
     <>
       <Section title="Recently saved" accent="yellow">
@@ -88,6 +97,43 @@ function SignedInHome({ recent, feed }: SignedInHomeProps) {
               />
             )
           }
+        </Loadable>
+      </Section>
+
+      <Section title="Coming up" accent="yellow">
+        <Loadable state={plans} loadingLabel="Loading plans..." errorTitle="Couldn't load plans">
+          {({ results }) => {
+            const upcoming = results.filter((a) => !isPast(a.starts_at)).slice(0, PLANS_COUNT);
+            return (
+              <View style={styles.plans}>
+                {upcoming.length ? (
+                  upcoming.map((activity) => (
+                    <ActivityRow key={activity.id} activity={activity} myId={myId} />
+                  ))
+                ) : (
+                  <ThemedText type="small" themeColor="textSecondary">
+                    No plans coming up. Pick a place and invite your friends.
+                  </ThemedText>
+                )}
+                <View style={styles.planLinks}>
+                  <Button
+                    variant="plain"
+                    size="small"
+                    label="Plan something"
+                    onPress={() => router.push('/activities/new')}
+                  />
+                  {results.length ? (
+                    <Button
+                      variant="plain"
+                      size="small"
+                      label="See all plans"
+                      onPress={() => router.push('/activities')}
+                    />
+                  ) : null}
+                </View>
+              </View>
+            );
+          }}
         </Loadable>
       </Section>
 
@@ -137,5 +183,12 @@ const styles = StyleSheet.create({
   },
   feed: {
     gap: Spacing.four,
+  },
+  plans: {
+    gap: Spacing.two,
+  },
+  planLinks: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
   },
 });

@@ -2,6 +2,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
 import type { PlaceDetail } from '@/api/types';
+import { Button } from '@/components/button';
 import { EmptyState } from '@/components/empty-state';
 import { InterestButton, useInterest, type InterestVia } from '@/components/interest-button';
 import { PlaceCard } from '@/components/place-card';
@@ -73,6 +74,7 @@ export default function PlaceScreen() {
 function LoadedPlace({ place, via }: { place: PlaceDetail; via?: InterestVia }) {
   const interest = useInterest(place, via);
   const theme = useTheme();
+  const { status } = useAuth();
 
   return (
     <PlaceCard
@@ -95,6 +97,21 @@ function LoadedPlace({ place, via }: { place: PlaceDetail; via?: InterestVia }) 
             <ThemedText type="small" style={{ color: theme.tint }} accessibilityLiveRegion="polite">
               {interest.error}
             </ThemedText>
+          ) : null}
+          {status === 'signedIn' ? (
+            <View style={styles.plan}>
+              <Button
+                variant="plain"
+                size="small"
+                label="Make a plan here"
+                onPress={() =>
+                  router.push({
+                    pathname: '/activities/new',
+                    params: { placeId: String(place.id), placeName: place.name },
+                  })
+                }
+              />
+            </View>
           ) : null}
         </View>
       }
@@ -136,6 +153,9 @@ const styles = StyleSheet.create({
   },
   via: {
     flex: 1,
+  },
+  plan: {
+    alignItems: 'flex-start',
   },
   back: {
     minHeight: 44,

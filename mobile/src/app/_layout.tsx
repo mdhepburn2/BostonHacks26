@@ -75,6 +75,9 @@ export default function RootLayout() {
           <Stack.Screen name="circles/index" options={{ title: 'Circles', headerBackTitle: 'Back' }} />
           <Stack.Screen name="circles/[id]" options={{ title: 'Circle', headerBackTitle: 'Back' }} />
           <Stack.Screen name="circles/new" options={{ presentation: 'modal', title: '' }} />
+          <Stack.Screen name="activities/index" options={{ title: 'Plans', headerBackTitle: 'Back' }} />
+          <Stack.Screen name="activities/[id]" options={{ title: 'Plan', headerBackTitle: 'Back' }} />
+          <Stack.Screen name="activities/new" options={{ title: '', headerBackTitle: 'Back' }} />
           <Stack.Screen
             name="requests"
             options={{ title: 'Friend requests', headerBackTitle: 'Back' }}

@@ -355,11 +355,12 @@ class ActivitySerializer(serializers.ModelSerializer):
     circle_id = serializers.IntegerField(required=False, allow_null=True)
     counts = serializers.SerializerMethodField()
     my_response = serializers.SerializerMethodField()
+    responses = serializers.SerializerMethodField()
 
     class Meta:
         model = Activity
         fields = ['id', 'author', 'place', 'place_id', 'title', 'description', 'starts_at', 'visibility',
-                  'circle_id', 'counts', 'my_response']
+                  'circle_id', 'counts', 'my_response', 'responses']
         read_only_fields = ['id']
 
     def get_counts(self, obj):
@@ -367,6 +368,11 @@ class ActivitySerializer(serializers.ModelSerializer):
 
     def get_my_response(self, obj):
         return getattr(obj, 'my_response', None)
+
+    def get_responses(self, obj):
+        # `reply_list` is prefetched by the view: going first, then interested, oldest reply first.
+        return [{'user': UserShortSerializer(r.user).data, 'status': r.status}
+                for r in getattr(obj, 'reply_list', [])]
 
     def validate_title(self, title):
         title = ' '.join(title.split())

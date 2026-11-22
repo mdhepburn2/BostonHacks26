@@ -15,3 +15,25 @@ export function fromIsoDate(iso: string) {
 export function formatDate(date: Date) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
+
+/** "Sat, Nov 22 · 7:00 PM" for an activity's start time (adds the year if it isn't this year). */
+export function formatWhen(iso: string) {
+  const date = new Date(iso);
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  const day = date.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  });
+  return `${day} · ${formatTime(date)}`;
+}
+
+/** "7:00 PM" */
+export function formatTime(date: Date) {
+  return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
+export function isPast(iso: string) {
+  return new Date(iso).getTime() < Date.now();
+}

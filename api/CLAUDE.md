@@ -330,6 +330,7 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 - `POST /api/activities/<id>/respond/` body: `status` (`interested` or `going`). Returns the activity shape: 201 for a first reply, 200 when it changes or repeats one. Each person has one reply.
 - `DELETE /api/activities/<id>/respond/` returns 204, including when I hadn't replied. Deleting an activity deletes its replies.
 - Visibility is checked live through `visible_activities(viewer)` in `app/permissions.py` (with `is_activity_author` and `own_responses`). `counts` includes every reply, and `my_response` is mine.
+- `responses` lists everyone who replied (anyone who can see the activity sees them all): going first, then interested, each oldest reply first.
 
 **Friend request shape:**
 ```json
@@ -354,7 +355,8 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
   "visibility": "friends | circle | public",
   "circle_id": null,
   "counts": { "interested": 0, "going": 0 },
-  "my_response": "interested | going | null"
+  "my_response": "interested | going | null",
+  "responses": [ { "user": { "id": 0, "username": "" }, "status": "interested | going" } ]
 }
 ```
 

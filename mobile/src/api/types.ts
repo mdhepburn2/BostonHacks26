@@ -189,3 +189,31 @@ export type InterestResponse = {
 export type FriendsResponse = {
   results: UserSummary[];
 };
+
+/** Activities can't be private: there'd be no one to reply. */
+export type ActivityVisibility = Exclude<Visibility, 'private'>;
+
+export type ActivityReply = 'interested' | 'going';
+
+/** One item from GET /api/activities/, and GET / POST / PATCH /api/activities/<id>/. */
+export type Activity = {
+  id: number;
+  author: UserSummary;
+  place: PlaceSummary;
+  title: string;
+  description: string;
+  /** ISO datetime. */
+  starts_at: string;
+  visibility: ActivityVisibility;
+  circle_id: number | null;
+  /** Every reply, mine included. */
+  counts: { interested: number; going: number };
+  my_response: ActivityReply | null;
+  /** Everyone who replied: going first, then interested, oldest reply first. */
+  responses: { user: UserSummary; status: ActivityReply }[];
+};
+
+/** GET /api/activities/: upcoming soonest first, then past ones most recent first. */
+export type ActivitiesResponse = {
+  results: Activity[];
+};

@@ -69,6 +69,11 @@ function MyProfile({ user }: { user: User }) {
               label="Circles"
               onPress={() => router.push('/circles')}
             />
+            <LinkRow
+              icon={{ ios: 'calendar', android: 'event', web: 'event' }}
+              label="Plans"
+              onPress={() => router.push('/activities')}
+            />
           </View>
         }
       />

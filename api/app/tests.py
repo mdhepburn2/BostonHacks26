@@ -1854,7 +1854,7 @@ class CircleTests(LoggedInTestCase):
 from .models import Activity, ActivityResponse
 
 ACTIVITY_KEYS = {'id', 'author', 'place', 'title', 'description', 'starts_at', 'visibility', 'circle_id',
-                 'counts', 'my_response'}
+                 'counts', 'my_response', 'responses'}
 
 
 class ActivityTests(LoggedInTestCase):
@@ -1895,6 +1895,7 @@ class ActivityTests(LoggedInTestCase):
         self.assertEqual(body['visibility'], 'friends')  # the default
         self.assertEqual(body['counts'], {'interested': 0, 'going': 0})
         self.assertIsNone(body['my_response'])
+        self.assertEqual(body['responses'], [])
 
     def test_cant_be_private(self):
         response = self.post(visibility='private')
@@ -2037,6 +2038,23 @@ class ActivityTests(LoggedInTestCase):
         self.assertEqual(item['my_response'], 'interested')
         self.as_user(self.other)
         self.assertEqual(self.client.get('/api/activities/').json()['results'][0]['my_response'], 'going')
+
+    def test_responses_list_who_replied(self):
+        theirs = self.make(self.other, 'public')
+        ActivityResponse.objects.create(activity=theirs, user=self.user, status='interested')
+        ActivityResponse.objects.create(activity=theirs, user=self.stranger, status='going')
+        ActivityResponse.objects.create(activity=theirs, user=self.other, status='going')
+        expected = [
+            {'user': {'id': self.stranger.id, 'username': 'stranger'}, 'status': 'going'},
+            {'user': {'id': self.other.id, 'username': 'sam'}, 'status': 'going'},
+            {'user': {'id': self.user.id, 'username': 'matt'}, 'status': 'interested'},
+        ]
+        self.assertEqual(self.client.get(self.url(theirs)).json()['responses'], expected)
+        self.assertEqual(self.client.get('/api/activities/').json()['results'][0]['responses'], expected)
+        # Replying returns the updated list too.
+        body = self.client.post(self.url(theirs, 'respond'), {'status': 'going'}).json()
+        self.assertEqual([r['user']['username'] for r in body['responses']], ['matt', 'stranger', 'sam'])  # all going; matt replied first
+        self.assertEqual({r['status'] for r in body['responses']}, {'going'})
 
 
 # --- Friends feed ----------------------------------------------------------

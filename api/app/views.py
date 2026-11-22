@@ -2,7 +2,7 @@ import logging
 
 from django.contrib.auth import authenticate, get_user_model
 from django.db import IntegrityError, transaction
-from django.db.models import Case, Count, F, OuterRef, Q, Subquery, Value, When
+from django.db.models import Case, Count, F, OuterRef, Prefetch, Q, Subquery, Value, When
 from django.db.models.functions import Coalesce, Greatest, Lower
 from django.http import JsonResponse
 from django.utils import timezone
@@ -563,9 +563,16 @@ def circle_member_detail(request, circle_id, user_id):
 # --- Activities (Phase 3) -------------------------------------------------
 
 def _activities(user):
-    """Activities the user can see, with reply counts and their own reply attached."""
+    """Activities the user can see, with reply counts, who replied, and their own reply attached.
+
+    Anyone who can see an activity sees everyone's replies (going first, then interested, each
+    in the order they replied), the same people the counts already count.
+    """
     mine = permissions.own_responses(user).filter(activity=OuterRef('pk')).values('status')[:1]
-    return permissions.visible_activities(user).select_related('author', 'place').annotate(
+    replies = ActivityResponse.objects.select_related('user').order_by('status', 'created_at', 'id')
+    return permissions.visible_activities(user).select_related('author', 'place').prefetch_related(
+        Prefetch('responses', queryset=replies, to_attr='reply_list'),
+    ).annotate(
         interested_count=Count('responses', filter=Q(responses__status=ActivityResponse.STATUS_INTERESTED)),
         going_count=Count('responses', filter=Q(responses__status=ActivityResponse.STATUS_GOING)),
         my_response=Subquery(mine),
