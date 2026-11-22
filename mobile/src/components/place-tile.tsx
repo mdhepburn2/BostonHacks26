@@ -15,6 +15,10 @@ type PlaceTileProps = {
   saved?: Pick<SavedPlace, 'visited' | 'visited_at' | 'tags' | 'visibility'>;
   /** Show who can see it (only for my own saved places). */
   showVisibility?: boolean;
+  /** Adds a visited checkbox to the corner (my own saved places only). */
+  onToggleVisited?: () => void;
+  /** A change to this saved place is being sent; dims the tile. */
+  pending?: boolean;
 };
 
 const VISIBILITY_ICONS: Record<Visibility, SymbolViewProps['name']> = {
@@ -25,7 +29,14 @@ const VISIBILITY_ICONS: Record<Visibility, SymbolViewProps['name']> = {
 };
 
 /** A compact, colourful place card that opens the full place card when tapped. */
-export function PlaceTile({ place, variant = 'row', saved, showVisibility }: PlaceTileProps) {
+export function PlaceTile({
+  place,
+  variant = 'row',
+  saved,
+  showVisibility,
+  onToggleVisited,
+  pending,
+}: PlaceTileProps) {
   const theme = useTheme();
   const { accent, shape } = placeAccents(place.id);
   const background = theme[accent];
@@ -37,7 +48,7 @@ export function PlaceTile({ place, variant = 'row', saved, showVisibility }: Pla
       onPress={() => router.push({ pathname: '/place/[id]', params: { id: String(place.id) } })}
       accessibilityRole="button"
       accessibilityLabel={`Open ${place.name}`}
-      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>
+      style={({ pressed }) => ({ opacity: pending ? 0.5 : pressed ? 0.85 : 1 })}>
       <View style={[styles.base, tile ? styles.tile : styles.row, { backgroundColor: background }]}>
         <View
           style={[tile ? styles.tileCircle : styles.rowCircle, { backgroundColor: theme[shape] }]}
@@ -68,7 +79,7 @@ export function PlaceTile({ place, variant = 'row', saved, showVisibility }: Pla
           ) : null}
         </View>
 
-        <View style={styles.bottom}>
+        <View style={[styles.bottom, onToggleVisited && styles.bottomWithCheck]}>
           <ThemedText
             numberOfLines={tile ? 3 : 2}
             style={[tile ? styles.tileName : styles.rowName, { color: foreground }]}>
@@ -82,6 +93,31 @@ export function PlaceTile({ place, variant = 'row', saved, showVisibility }: Pla
             </View>
           ) : null}
         </View>
+
+        {onToggleVisited && saved ? (
+          <Pressable
+            onPress={onToggleVisited}
+            disabled={pending}
+            hitSlop={10}
+            accessibilityRole="checkbox"
+            accessibilityLabel={`Visited ${place.name}`}
+            accessibilityState={{ checked: saved.visited, disabled: pending }}
+            style={({ pressed }) => [
+              styles.check,
+              { borderColor: foreground },
+              saved.visited && { backgroundColor: foreground },
+              pressed && { opacity: 0.6 },
+            ]}>
+            {saved.visited ? (
+              <SymbolView
+                name={{ ios: 'checkmark', android: 'check', web: 'check' }}
+                size={18}
+                weight="bold"
+                tintColor={background}
+              />
+            ) : null}
+          </Pressable>
+        ) : null}
       </View>
     </Pressable>
   );
@@ -151,6 +187,21 @@ const styles = StyleSheet.create({
     lineHeight: 28,
     letterSpacing: -0.5,
     paddingRight: Spacing.five,
+  },
+  // Keep the name and tags clear of the visited checkbox in the corner.
+  bottomWithCheck: {
+    paddingRight: 44,
+  },
+  check: {
+    position: 'absolute',
+    right: Spacing.three,
+    bottom: Spacing.three,
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    borderWidth: 2.5,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   tags: {
     flexDirection: 'row',

@@ -16,6 +16,7 @@ import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useRequest } from '@/hooks/use-request';
 import { useTheme } from '@/hooks/use-theme';
+import { formatDate, fromIsoDate, toIsoDate } from '@/utils/dates';
 
 const SHARING_OPTIONS: readonly { value: Visibility; label: string }[] = [
   { value: 'private', label: 'Only me' },
@@ -319,21 +320,6 @@ function VisitedRow({ visited, visitedAt, busy, onToggle, onDate }: VisitedRowPr
 function toInfo(saved: SavedPlace): SavedInfo {
   const { id, visited, visited_at, visibility, circle_id } = saved;
   return { id, visited, visited_at, visibility, circle_id };
-}
-
-/** A local calendar date as "YYYY-MM-DD" (not toISOString, which is UTC and can be a day off). */
-function toIsoDate(date: Date) {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function fromIsoDate(iso: string) {
-  const [year, month, day] = iso.split('-').map(Number);
-  return new Date(year, month - 1, day);
-}
-
-function formatDate(date: Date) {
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 const styles = StyleSheet.create({
