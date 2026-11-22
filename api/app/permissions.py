@@ -16,7 +16,7 @@ their visibility (`visible_*`):
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 
-from .models import Circle, Friendship, PlaceInterest, SavedPlace, Tag, Visibility
+from .models import Circle, CircleMembership, Friendship, PlaceInterest, SavedPlace, Tag, Visibility
 
 
 def own_saved_places(user):
@@ -44,6 +44,25 @@ def circles_for(user):
 def circle_for_sharing(user, circle_id):
     """The circle with this id if the user may share things with it, else None."""
     return circles_for(user).filter(pk=circle_id).first()
+
+
+def is_circle_owner(user, circle):
+    """Only the owner can rename, delete or add people to a circle."""
+    return circle.owner_id == user.pk
+
+
+def can_remove_member(user, circle, member_id):
+    """The owner can remove anyone but themselves; members can only remove themselves (leave)."""
+    if is_circle_owner(user, circle):
+        return member_id != user.pk
+    return member_id == user.pk
+
+
+def drop_from_each_others_circles(a, b):
+    """After unfriending, take each user out of circles the other owns (circles are friends only)."""
+    CircleMembership.objects.filter(
+        Q(circle__owner=a, user=b) | Q(circle__owner=b, user=a)
+    ).delete()
 
 
 # --- Friends (Phase 3) ----------------------------------------------------

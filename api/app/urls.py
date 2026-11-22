@@ -25,4 +25,8 @@ urlpatterns = [
     path('friends/<int:user_id>/', views.unfriend, name='unfriend'),
     path('users/<int:user_id>/saved/', views.user_saved_places, name='user-saved-places'),
     path('places/<int:place_id>/interest/', views.place_interest, name='place-interest'),
+    path('circles/', views.circles, name='circles'),
+    path('circles/<int:circle_id>/', views.circle_detail, name='circle-detail'),
+    path('circles/<int:circle_id>/members/', views.circle_members, name='circle-members'),
+    path('circles/<int:circle_id>/members/<int:user_id>/', views.circle_member_detail, name='circle-member-detail'),
 ]

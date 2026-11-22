@@ -14,10 +14,11 @@ from rest_framework.response import Response
 from rest_framework.views import exception_handler as drf_exception_handler
 
 from . import permissions
-from .models import Friendship, Place, PlaceInterest
-from .serializers import (FriendRequestInputSerializer, FriendRequestSerializer, IdentifyInputSerializer,
-                          LoginSerializer, PlaceInterestInputSerializer, RegisterSerializer, SavedPlaceSerializer, SearchInputSerializer,
-                          TagSerializer, UserSerializer, UserShortSerializer)
+from .models import CircleMembership, Friendship, Place, PlaceInterest
+from .serializers import (CircleMemberInputSerializer, CircleSerializer, FriendRequestInputSerializer,
+                          FriendRequestSerializer, IdentifyInputSerializer, LoginSerializer,
+                          PlaceInterestInputSerializer, RegisterSerializer, SavedPlaceSerializer,
+                          SearchInputSerializer, TagSerializer, UserSerializer, UserShortSerializer)
 from .services.http import ExternalAPIError
 from .services.identify import identify as identify_photo
 from .services.place_card import get_card
@@ -319,8 +320,10 @@ def decline_friend_request(request, request_id):
 def unfriend(request, user_id):
     if not permissions.are_friends(request.user, user_id):
         return Response({'detail': "You aren't friends with that user."}, status=status.HTTP_404_NOT_FOUND)
-    # Clear every row between the pair so either of them can send a fresh request later.
-    permissions.friendships_between(request.user, user_id).delete()
+    with transaction.atomic():
+        # Clear every row between the pair so either of them can send a fresh request later.
+        permissions.friendships_between(request.user, user_id).delete()
+        permissions.drop_from_each_others_circles(request.user, user_id)
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -367,3 +370,99 @@ def place_interest(request, place_id):
         'via_saved_place_id': interest.via_saved_place_id,
         'friends_interested': permissions.friends_interested_count(request.user, place),
     }, status=status_code)
+
+
+# --- Circles (Phase 3) ----------------------------------------------------
+
+def _my_circles(user):
+    return permissions.circles_for(user).select_related('owner') \
+        .prefetch_related('memberships__user').order_by('name', 'id')
+
+
+def _circle_response(user, circle_id, status_code=status.HTTP_200_OK):
+    return Response(CircleSerializer(_my_circles(user).get(pk=circle_id)).data, status=status_code)
+
+
+def _circle_not_found():
+    return Response({'detail': 'Circle not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+
+def _owner_only():
+    return Response({'detail': 'Only the circle owner can do that.'}, status=status.HTTP_403_FORBIDDEN)
+
+
+@api_view(['GET', 'POST'])
+def circles(request):
+    """Circles I belong to (including ones I own), A to Z / create one."""
+    if request.method == 'GET':
+        return Response({'results': CircleSerializer(_my_circles(request.user), many=True).data})
+
+    data = CircleSerializer(data=request.data)
+    data.is_valid(raise_exception=True)
+    with transaction.atomic():
+        circle = data.save(owner=request.user)
+        CircleMembership.objects.create(circle=circle, user=request.user, role=CircleMembership.ROLE_OWNER)
+    return _circle_response(request.user, circle.pk, status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+def circle_detail(request, circle_id):
+    # Members can see it; anyone else gets 404 so circles can't be found by guessing ids.
+    circle = _my_circles(request.user).filter(pk=circle_id).first()
+    if circle is None:
+        return _circle_not_found()
+    if request.method == 'GET':
+        return Response(CircleSerializer(circle).data)
+    if not permissions.is_circle_owner(request.user, circle):
+        return _owner_only()
+    if request.method == 'DELETE':
+        circle.delete()  # things shared with it become owner-only
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    data = CircleSerializer(circle, data=request.data, partial=True)
+    data.is_valid(raise_exception=True)
+    data.save()
+    return _circle_response(request.user, circle.pk)
+
+
+@api_view(['POST'])
+def circle_members(request, circle_id):
+    """Add one of my friends to a circle I own. Adding someone already in it returns 200."""
+    circle = permissions.circle_for_sharing(request.user, circle_id)
+    if circle is None:
+        return _circle_not_found()
+    if not permissions.is_circle_owner(request.user, circle):
+        return _owner_only()
+
+    data = CircleMemberInputSerializer(data=request.data)
+    data.is_valid(raise_exception=True)
+    user_id = data.validated_data['user_id']
+    if circle.memberships.filter(user_id=user_id).exists():
+        return _circle_response(request.user, circle.pk)
+    if not permissions.are_friends(request.user, user_id):
+        return Response({'user_id': ['You can only add friends to a circle.']},
+                        status=status.HTTP_400_BAD_REQUEST)
+    try:
+        with transaction.atomic():
+            CircleMembership.objects.create(circle=circle, user_id=user_id)
+    except IntegrityError:  # a double tap added them in between
+        return _circle_response(request.user, circle.pk)
+    return _circle_response(request.user, circle.pk, status.HTTP_201_CREATED)
+
+
+@api_view(['DELETE'])
+def circle_member_detail(request, circle_id, user_id):
+    """Owner removes a member, or a member leaves. The owner can't leave (delete the circle instead)."""
+    circle = permissions.circle_for_sharing(request.user, circle_id)
+    if circle is None:
+        return _circle_not_found()
+    membership = circle.memberships.filter(user_id=user_id).first()
+    if membership is None:
+        return Response({'detail': "That user isn't in this circle."}, status=status.HTTP_404_NOT_FOUND)
+    if not permissions.can_remove_member(request.user, circle, user_id):
+        if permissions.is_circle_owner(request.user, circle):
+            return Response({'detail': "The owner can't leave their circle. Delete it instead."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return _owner_only()
+    membership.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)

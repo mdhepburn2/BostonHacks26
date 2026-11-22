@@ -88,8 +88,8 @@ class Visibility(models.TextChoices):
 class Circle(models.Model):
     """A group of friends for making plans.
 
-    Created here because saved places can be shared with a circle.
-    The circle endpoints come in Phase 3; until then circles are made in the admin.
+    Saved places (and later activities) can be shared with a circle. Only the
+    owner's friends can be added, and unfriending the owner removes you.
     """
 
     name = models.CharField(max_length=100)

@@ -220,7 +220,7 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 - `GET /api/tags/` returns `{"results": [<tag shape>]}`, A to Z. Tags are private to their owner, except that they show on a saved place to anyone who can see that saved place.
 - `POST /api/tags/` returns 201, or 200 with the existing tag if the user already has one with that name (ignoring case). Names are trimmed with spaces collapsed, 1 to 50 characters.
 - `PATCH /api/tags/<id>/` renames it; 400 if another of the user's tags already has that name.
-- `Circle` and `CircleMembership` models exist already (for the `circle` FK) but have no endpoints until Phase 3. Make them in the admin for now.
+- Circles are managed with the Phase 3 `/api/circles/` endpoints.
 
 **Saved place shape:**
 ```json
@@ -269,7 +269,7 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 - `GET /api/friends/requests/` returns `{"results": [<friend request shape>]}`: pending requests sent to me, newest first.
 - `POST /api/friends/requests/` body: `username` (ignores case). Returns 201 with the new request, or 200 with the existing one if I already asked. If they already asked me, this accepts their request instead (200, `status: "accepted"`). Re-sending after they declined puts it back in their requests (201). 404 for an unknown username, 400 for myself or someone I'm already friends with.
 - Accept / decline only work on pending requests sent to me (anything else is 404) and return the request shape. Accepting removes any other request between the two users.
-- `DELETE /api/friends/<user_id>/` returns 204, or 404 if we aren't friends. It clears every request between the two users so either can send a new one.
+- `DELETE /api/friends/<user_id>/` returns 204, or 404 if we aren't friends. It clears every request between the two users so either can send a new one, and removes each of them from circles the other owns.
 - Friend checks (`friends_of`, `are_friends`, `friend_ids`) live in `app/permissions.py`.
 
 **Other users' saved places:**
@@ -284,6 +284,28 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 - `DELETE /api/places/<id>/interest/` returns 204, including when I wasn't interested. Both are 404 for an unknown place.
 - Unsaving the saved place an interest came from keeps the interest (`via_saved_place` becomes null).
 - Interest helpers (`own_interests`, `interested_for_card`, `friends_interested_count`, `saved_place_for_interest`) live in `app/permissions.py`. The count only includes accepted friends and is checked live.
+
+**Circles:**
+- `GET /api/circles/` returns `{"results": [<circle shape>]}`: every circle I'm in (owned or joined), A to Z.
+- `POST /api/circles/` body: `name` (trimmed, spaces collapsed, 1 to 100 characters), optional `description`. Returns 201; the creator is the owner and its first member.
+- Circles I'm not in are 404 for every circle endpoint. Members can view; edit, delete and adding members are owner-only (403 for other members).
+- `DELETE /api/circles/<id>/` returns 204. Saved places shared with it become owner-only.
+- `POST /api/circles/<id>/members/` body: `user_id`. Returns 201 with the circle shape, 200 if they're already in it, 400 if they aren't my friend.
+- `DELETE /api/circles/<id>/members/<user_id>/` returns 204. The owner can remove anyone else; a member can only remove themselves (leave). The owner can't leave (400, delete the circle instead). 404 if that user isn't in the circle.
+- Circle helpers (`circles_for`, `circle_for_sharing`, `is_circle_owner`, `can_remove_member`, `drop_from_each_others_circles`) live in `app/permissions.py`.
+
+**Circle shape:**
+```json
+{
+  "id": 0,
+  "name": "",
+  "description": "",
+  "owner": { "id": 0, "username": "" },
+  "members": [ { "id": 0, "username": "", "role": "owner | member", "joined_at": "" } ],
+  "created_at": ""
+}
+```
+`members` lists the owner first, then everyone else in the order they joined.
 
 **Friend request shape:**
 ```json

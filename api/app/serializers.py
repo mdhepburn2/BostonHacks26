@@ -4,7 +4,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from . import permissions
-from .models import Friendship, Place, SavedPlace, Tag, Visibility
+from .models import Circle, CircleMembership, Friendship, Place, SavedPlace, Tag, Visibility
 
 User = get_user_model()
 
@@ -253,3 +253,46 @@ class PlaceInterestInputSerializer(serializers.Serializer):
         if saved.place_id != self.context['place'].pk:
             raise serializers.ValidationError('That saved place is for a different place.')
         return saved
+
+
+# --- Circles (Phase 3) ----------------------------------------------------
+
+class CircleMemberSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(source='user.id', read_only=True)
+    username = serializers.CharField(source='user.username', read_only=True)
+
+    class Meta:
+        model = CircleMembership
+        fields = ['id', 'username', 'role', 'joined_at']
+
+
+class CircleSerializer(serializers.ModelSerializer):
+    """Circle shape, and the body for POST /api/circles/ and PATCH /api/circles/<id>/."""
+
+    name = serializers.CharField(max_length=100, trim_whitespace=True)
+    description = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    owner = UserShortSerializer(read_only=True)
+    members = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Circle
+        fields = ['id', 'name', 'description', 'owner', 'members', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+    def get_members(self, obj):
+        """Owner first, then everyone else in the order they joined."""
+        memberships = sorted(obj.memberships.all(),
+                             key=lambda m: (m.role != CircleMembership.ROLE_OWNER, m.joined_at, m.pk))
+        return CircleMemberSerializer(memberships, many=True).data
+
+    def validate_name(self, name):
+        name = ' '.join(name.split())
+        if not name:
+            raise serializers.ValidationError('Give the circle a name.')
+        return name
+
+
+class CircleMemberInputSerializer(serializers.Serializer):
+    """Body for POST /api/circles/<id>/members/."""
+
+    user_id = serializers.IntegerField()

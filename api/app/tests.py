@@ -1654,3 +1654,174 @@ class PlaceInterestTests(LoggedInTestCase):
         theirs.delete()
         interest = PlaceInterest.objects.get(user=self.user)
         self.assertIsNone(interest.via_saved_place)
+
+
+# --- Circles (step 20) ----------------------------------------------------
+
+CIRCLE_KEYS = {'id', 'name', 'description', 'owner', 'members', 'created_at'}
+MEMBER_KEYS = {'id', 'username', 'role', 'joined_at'}
+
+
+class CircleTests(LoggedInTestCase):
+    """"matt" (self.user) is logged in and friends with "sam" (self.other) and "alex". "stranger" isn't a friend."""
+
+    def setUp(self):
+        super().setUp()
+        self.third = User.objects.create_user('alex', password=GOOD_PASSWORD)
+        self.stranger = User.objects.create_user('stranger')
+        for friend in (self.other, self.third):
+            Friendship.objects.create(from_user=self.user, to_user=friend, status=Friendship.STATUS_ACCEPTED)
+
+    def url(self, circle, *rest):
+        return '/'.join([f'/api/circles/{circle.id}', *map(str, rest), ''])
+
+    def member_ids(self, circle):
+        return set(circle.memberships.values_list('user_id', flat=True))
+
+    # --- create / list / view ---
+
+    def test_create_returns_shape_and_makes_me_owner(self):
+        response = self.client.post('/api/circles/', {'name': '  Weekend   crew ', 'description': 'brunch'})
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(set(body), CIRCLE_KEYS)
+        self.assertEqual(body['name'], 'Weekend crew')
+        self.assertEqual(body['owner'], {'id': self.user.id, 'username': 'matt'})
+        self.assertEqual(len(body['members']), 1)
+        self.assertEqual(set(body['members'][0]), MEMBER_KEYS)
+        self.assertEqual(body['members'][0]['role'], 'owner')
+        circle = Circle.objects.get()
+        self.assertEqual(circle.owner, self.user)
+
+    def test_create_needs_a_name(self):
+        self.assertEqual(self.client.post('/api/circles/', {}).status_code, 400)
+        self.assertEqual(self.client.post('/api/circles/', {'name': '   '}).status_code, 400)
+        self.assertEqual(self.client.post('/api/circles/', {'name': 'x' * 101}).status_code, 400)
+        self.assertFalse(Circle.objects.exists())
+
+    def test_list_shows_only_circles_i_belong_to(self):
+        mine = self.make_circle(self.user)
+        mine.name = 'b mine'
+        mine.save()
+        joined = self.make_circle(self.other, self.user)
+        joined.name = 'a joined'
+        joined.save()
+        self.make_circle(self.other)  # not in it
+        response = self.client.get('/api/circles/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([c['id'] for c in response.json()['results']], [joined.id, mine.id])
+
+    def test_members_listed_owner_first(self):
+        circle = self.make_circle(self.other, self.user, self.third)
+        members = self.client.get(self.url(circle)).json()['members']
+        self.assertEqual([m['username'] for m in members], ['sam', 'matt', 'alex'])
+        self.assertEqual([m['role'] for m in members], ['owner', 'member', 'member'])
+
+    def test_non_member_gets_404(self):
+        circle = self.make_circle(self.other)
+        self.assertEqual(self.client.get(self.url(circle)).status_code, 404)
+        self.assertEqual(self.client.patch(self.url(circle), {'name': 'x'}).status_code, 404)
+        self.assertEqual(self.client.delete(self.url(circle)).status_code, 404)
+        self.assertEqual(self.client.post(self.url(circle, 'members'), {'user_id': self.third.id}).status_code, 404)
+        self.assertEqual(self.client.delete(self.url(circle, 'members', self.other.id)).status_code, 404)
+        self.assertEqual(self.client.get('/api/circles/9999/').status_code, 404)
+
+    def test_requires_login(self):
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get('/api/circles/').status_code, 401)
+
+    # --- edit / delete ---
+
+    def test_owner_can_edit(self):
+        circle = self.make_circle(self.user)
+        response = self.client.patch(self.url(circle), {'name': 'New name', 'description': 'hi'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['name'], 'New name')
+        self.assertEqual(response.json()['description'], 'hi')
+
+    def test_member_cant_edit_or_delete(self):
+        circle = self.make_circle(self.other, self.user)
+        self.assertEqual(self.client.patch(self.url(circle), {'name': 'mine now'}).status_code, 403)
+        self.assertEqual(self.client.delete(self.url(circle)).status_code, 403)
+        circle.refresh_from_db()
+        self.assertEqual(circle.name, 'Crew')
+
+    def test_delete_makes_shared_saved_places_owner_only(self):
+        circle = self.make_circle(self.user, self.other)
+        saved = SavedPlace.objects.create(user=self.user, place=self.place, visibility='circle', circle=circle)
+        self.assertEqual(self.client.delete(self.url(circle)).status_code, 204)
+        self.assertFalse(Circle.objects.exists())
+        saved.refresh_from_db()
+        self.assertIsNone(saved.circle)
+        self.assertFalse(perms.visible_saved_places(self.other).exists())
+
+    # --- members ---
+
+    def test_owner_adds_a_friend(self):
+        circle = self.make_circle(self.user)
+        response = self.client.post(self.url(circle, 'members'), {'user_id': self.other.id})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual({m['id'] for m in response.json()['members']}, {self.user.id, self.other.id})
+
+    def test_adding_twice_returns_200(self):
+        circle = self.make_circle(self.user, self.other)
+        response = self.client.post(self.url(circle, 'members'), {'user_id': self.other.id})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(circle.memberships.count(), 2)
+
+    def test_cant_add_non_friend(self):
+        circle = self.make_circle(self.user)
+        response = self.client.post(self.url(circle, 'members'), {'user_id': self.stranger.id})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.client.post(self.url(circle, 'members'), {'user_id': 9999}).status_code, 400)
+        self.assertEqual(self.client.post(self.url(circle, 'members'), {}).status_code, 400)
+        self.assertEqual(self.member_ids(circle), {self.user.id})
+
+    def test_member_cant_add_people(self):
+        circle = self.make_circle(self.other, self.user)
+        self.assertEqual(self.client.post(self.url(circle, 'members'), {'user_id': self.third.id}).status_code, 403)
+
+    def test_owner_removes_a_member(self):
+        circle = self.make_circle(self.user, self.other)
+        self.assertEqual(self.client.delete(self.url(circle, 'members', self.other.id)).status_code, 204)
+        self.assertEqual(self.member_ids(circle), {self.user.id})
+
+    def test_member_leaves(self):
+        circle = self.make_circle(self.other, self.user)
+        self.assertEqual(self.client.delete(self.url(circle, 'members', self.user.id)).status_code, 204)
+        self.assertEqual(self.client.get(self.url(circle)).status_code, 404)
+
+    def test_member_cant_remove_others(self):
+        circle = self.make_circle(self.other, self.user, self.third)
+        self.assertEqual(self.client.delete(self.url(circle, 'members', self.third.id)).status_code, 403)
+        self.assertEqual(self.client.delete(self.url(circle, 'members', self.other.id)).status_code, 403)
+        self.assertEqual(len(self.member_ids(circle)), 3)
+
+    def test_owner_cant_leave(self):
+        circle = self.make_circle(self.user)
+        self.assertEqual(self.client.delete(self.url(circle, 'members', self.user.id)).status_code, 400)
+
+    def test_removing_someone_not_in_it_is_404(self):
+        circle = self.make_circle(self.user)
+        self.assertEqual(self.client.delete(self.url(circle, 'members', self.other.id)).status_code, 404)
+
+    def test_leaving_hides_circle_shared_places(self):
+        circle = self.make_circle(self.other, self.user)
+        SavedPlace.objects.create(user=self.other, place=self.place, visibility='circle', circle=circle)
+        self.assertEqual(perms.visible_saved_places(self.user).count(), 1)
+        self.client.delete(self.url(circle, 'members', self.user.id))
+        self.assertFalse(perms.visible_saved_places(self.user).exists())
+
+    def test_unfriending_removes_from_each_others_circles(self):
+        mine = self.make_circle(self.user, self.other, self.third)
+        theirs = self.make_circle(self.other, self.user)
+        self.assertEqual(self.client.delete(f'/api/friends/{self.other.id}/').status_code, 204)
+        self.assertEqual(self.member_ids(mine), {self.user.id, self.third.id})
+        self.assertEqual(self.member_ids(theirs), {self.other.id})
+
+    def test_created_circle_can_be_used_for_sharing(self):
+        circle_id = self.client.post('/api/circles/', {'name': 'Crew'}).json()['id']
+        response = self.client.post('/api/saved/', {'place_id': self.place.id, 'visibility': 'circle',
+                                                    'circle_id': circle_id})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()['circle_id'], circle_id)
