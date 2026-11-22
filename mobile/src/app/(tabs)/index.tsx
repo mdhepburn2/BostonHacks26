@@ -109,6 +109,14 @@ function SignedInHome({ recent, feed }: SignedInHomeProps) {
                 icon={{ ios: 'person.2', android: 'group', web: 'group' }}
                 title="Nothing from friends yet"
                 body="Add friends to see the places they're saving and visiting."
+                action={
+                  <Button
+                    label="Find friends"
+                    onPress={() =>
+                      router.navigate({ pathname: '/search', params: { mode: 'people' } })
+                    }
+                  />
+                }
               />
             )
           }

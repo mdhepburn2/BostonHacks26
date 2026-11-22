@@ -1,79 +1,62 @@
-import { StyleSheet, View } from 'react-native';
+import { Alert, StyleSheet, View } from 'react-native';
 
-import { getProfile } from '@/api/social';
+import type { User } from '@/api/types';
 import { Button } from '@/components/button';
+import { ProfileView, useProfileData } from '@/components/profile-view';
 import { Screen } from '@/components/screen';
 import { SignInPrompt } from '@/components/sign-in-prompt';
 import { ThemedText } from '@/components/themed-text';
-import { AccentKeys, OnAccent, Spacing } from '@/constants/theme';
+import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
-import { useRefreshOnFocus, useRequest } from '@/hooks/use-request';
 import { useTheme } from '@/hooks/use-theme';
 
-// Step 13 adds my visible saved places, edit and settings; step 16 adds friend requests.
+// My profile as other people see it. Step 16 adds friend requests here.
 export default function ProfileScreen() {
-  const theme = useTheme();
-  const { status, user, logout } = useAuth();
-  const profile = useRequest(user ? `profile:${user.id}` : null, () => getProfile(user?.id ?? 0));
-  useRefreshOnFocus(profile.refresh);
+  const { status, user } = useAuth();
 
-  const accent = AccentKeys[(user?.id ?? 1) % AccentKeys.length];
-  const counts = profile.data?.counts;
-  const stats = [
-    { label: 'Friends', value: counts?.friends },
-    { label: 'Saved', value: counts?.saved },
-    { label: 'Visited', value: counts?.visited },
-  ];
+  if (user) return <MyProfile user={user} />;
+
+  return <Screen title="Profile">{status === 'signedOut' ? <GuestProfile /> : null}</Screen>;
+}
+
+function MyProfile({ user }: { user: User }) {
+  const { logout } = useAuth();
+  const data = useProfileData(user.id);
+
+  const confirmLogout = () =>
+    Alert.alert('Log out?', "You'll need your username and password to log back in.", [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Log out', style: 'destructive', onPress: () => void logout() },
+    ]);
 
   return (
-    <Screen
-      title="Profile"
-      refreshing={profile.refreshing}
-      onRefresh={user ? profile.refresh : undefined}>
-      <View style={styles.identity}>
-        <View style={[styles.avatar, { backgroundColor: user ? theme[accent] : theme.blue }]}>
-          <ThemedText type="subtitle" style={{ color: theme[OnAccent[user ? accent : 'blue']] }}>
-            {user ? user.username.slice(0, 1).toUpperCase() : '?'}
-          </ThemedText>
-        </View>
-        <View style={styles.names}>
-          <ThemedText type="subtitle">{user ? user.username : 'Guest'}</ThemedText>
-          <ThemedText type="small" themeColor="textSecondary">
-            {user ? user.email || 'Logged in' : 'Not logged in'}
-          </ThemedText>
-        </View>
+    <Screen title="Profile" refreshing={data.refreshing} onRefresh={data.refresh}>
+      <ProfileView data={data} userId={user.id} username={user.username} email={user.email} isMe />
+      <View style={styles.footer}>
+        <Button variant="plain" label="Log out" onPress={confirmLogout} />
       </View>
-
-      {user ? (
-        <>
-          <View style={[styles.stats, { backgroundColor: theme.backgroundElement }]}>
-            {stats.map((stat) => (
-              <View key={stat.label} style={styles.stat}>
-                <ThemedText type="subtitle">{stat.value ?? '–'}</ThemedText>
-                <ThemedText type="small" themeColor="textSecondary">
-                  {stat.label}
-                </ThemedText>
-              </View>
-            ))}
-          </View>
-          {profile.error ? (
-            <ThemedText type="small" themeColor="textSecondary">
-              {"Couldn't load your stats. "}
-              <ThemedText type="smallBold" style={{ color: theme.tint }} onPress={profile.retry}>
-                Try again
-              </ThemedText>
-            </ThemedText>
-          ) : null}
-          <Button variant="plain" label="Log out" onPress={logout} />
-        </>
-      ) : status === 'signedOut' ? (
-        <SignInPrompt
-          accent="green"
-          title="Log in to see your profile"
-          body="This is what other people see when they look you up: your stats and the places you've shared."
-        />
-      ) : null}
     </Screen>
+  );
+}
+
+function GuestProfile() {
+  const theme = useTheme();
+  return (
+    <>
+      <View style={styles.identity}>
+        <View style={[styles.avatar, { backgroundColor: theme.blue }]}>
+          <ThemedText type="subtitle" style={{ color: theme.onBlue }}>
+            ?
+          </ThemedText>
+        </View>
+        <ThemedText type="subtitle">Guest</ThemedText>
+      </View>
+      <SignInPrompt
+        accent="green"
+        title="Log in to see your profile"
+        body="This is what other people see when they look you up: your stats and the places you've shared."
+      />
+    </>
   );
 }
 
@@ -90,17 +73,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  names: {
-    gap: Spacing.half,
-  },
-  stats: {
-    flexDirection: 'row',
-    paddingVertical: Spacing.three,
-    borderRadius: Spacing.four,
-    borderCurve: 'continuous',
-  },
-  stat: {
-    flex: 1,
+  footer: {
     alignItems: 'center',
   },
 });

@@ -152,3 +152,22 @@ export type Circle = {
 export type CirclesResponse = {
   results: Circle[];
 };
+
+/** One result from GET /api/users/search/?q= */
+export type UserSearchResult = UserSummary & {
+  friendship: Friendship;
+};
+
+/** GET /api/users/search/?q= */
+export type UserSearchResponse = {
+  results: UserSearchResult[];
+};
+
+/** POST /api/friends/requests/ and the items of GET /api/friends/requests/ */
+export type FriendRequest = {
+  id: number;
+  from_user: UserSummary;
+  to_user: UserSummary;
+  status: 'pending' | 'accepted' | 'declined';
+  created_at: string;
+};

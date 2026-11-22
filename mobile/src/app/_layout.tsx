@@ -70,6 +70,7 @@ export default function RootLayout() {
           }}>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="place/[id]" options={{ title: 'Place', headerBackTitle: 'Back' }} />
+          <Stack.Screen name="user/[id]" options={{ title: 'Profile', headerBackTitle: 'Back' }} />
           <Stack.Screen
             name="scan"
             options={{ presentation: 'fullScreenModal', headerShown: false }}

@@ -1,4 +1,5 @@
-import { StyleSheet, View } from 'react-native';
+import { router } from 'expo-router';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import type { FeedItem } from '@/api/types';
 import { PlaceTile } from '@/components/place-tile';
@@ -13,7 +14,13 @@ export function FriendFeedItem({ item }: { item: FeedItem }) {
 
   return (
     <View style={styles.item}>
-      <View style={styles.header}>
+      <Pressable
+        onPress={() =>
+          router.push({ pathname: '/user/[id]', params: { id: String(item.friend.id) } })
+        }
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${item.friend.username}'s profile`}
+        style={({ pressed }) => [styles.header, pressed && styles.pressed]}>
         <View style={[styles.avatar, { backgroundColor: theme[avatarAccent] }]}>
           <ThemedText style={[styles.initial, { color: theme[OnAccent[avatarAccent]] }]}>
             {item.friend.username.slice(0, 1).toUpperCase()}
@@ -26,7 +33,7 @@ export function FriendFeedItem({ item }: { item: FeedItem }) {
         <ThemedText type="small" themeColor="textSecondary">
           {timeAgo(item.feed_at)}
         </ThemedText>
-      </View>
+      </Pressable>
       <PlaceTile place={item.saved.place} saved={item.saved} />
     </View>
   );
@@ -65,5 +72,8 @@ const styles = StyleSheet.create({
   },
   text: {
     flex: 1,
+  },
+  pressed: {
+    opacity: 0.6,
   },
 });
