@@ -165,6 +165,9 @@ MAILERS = {
 GOOGLE_PLACES_KEY = os.environ.get('GOOGLE_PLACES_KEY', '')
 LLM_API_KEY = os.environ.get('LLM_API_KEY', '')
 MBTA_KEY = os.environ.get('MBTA_KEY', '')
+# A URL or email Wikipedia can reach us at. Goes in the User-Agent; Wikimedia
+# rate-limits clients that don't send one much harder.
+WIKI_CONTACT = os.environ.get('WIKI_CONTACT', '').strip()
 # Flash-lite answers in ~1s on the free tier; the bigger flash models took 10s+
 # (over the 8s timeout) or returned 503 when we tested them. Set LLM_THINKING_LEVEL
 # to '' to omit thinkingConfig (needed for models that don't support it).

@@ -9,13 +9,21 @@ import logging
 import time
 
 import requests
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 8
 
-# Wikimedia asks API clients to send a descriptive User-Agent.
-USER_AGENT = 'Venturing/0.1 (hackathon project)'
+# Wikimedia asks API clients to send a descriptive User-Agent with contact info
+# (https://meta.wikimedia.org/wiki/User-Agent_policy) and rate-limits ones without it.
+USER_AGENT_BASE = 'Venturing/0.1'
+
+
+def user_agent():
+    """e.g. "Venturing/0.1 (https://github.com/me/app; hackathon project)". Contact comes from WIKI_CONTACT."""
+    contact = settings.WIKI_CONTACT
+    return f'{USER_AGENT_BASE} ({contact}; hackathon project)' if contact else f'{USER_AGENT_BASE} (hackathon project)'
 
 
 class ExternalAPIError(Exception):
@@ -38,7 +46,7 @@ def request_json(method, url, *, label, headers=None, **kwargs):
     Raises ExternalAPIError on any failure, including a body that isn't a JSON
     object (every API we call returns one).
     """
-    headers = {'User-Agent': USER_AGENT, **(headers or {})}
+    headers = {'User-Agent': user_agent(), **(headers or {})}
     start = time.monotonic()
     try:
         resp = requests.request(method, url, headers=headers, timeout=TIMEOUT_SECONDS, **kwargs)

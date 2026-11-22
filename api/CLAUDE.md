@@ -379,6 +379,7 @@ Social rules:
 - `GOOGLE_PLACES_KEY`
 - `LLM_API_KEY`
 - `MBTA_KEY`
+- `WIKI_CONTACT` (URL or email put in the User-Agent; Wikimedia rate-limits clients without contact info)
 
 ## Conventions and rules
 
