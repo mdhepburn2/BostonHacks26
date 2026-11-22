@@ -1,3 +1,5 @@
+import { File } from 'expo-file-system';
+
 import { request } from '@/api/client';
 import type { IdentifyResponse, PlaceDetail, SearchResponse } from '@/api/types';
 
@@ -16,8 +18,10 @@ export type IdentifyInput = Coords & {
 /** Scan: send a photo plus where the user is and which way they're facing. */
 export function identify({ photoUri, lat, lng, heading }: IdentifyInput): Promise<IdentifyResponse> {
   const form = new FormData();
-  // React Native's FormData takes a { uri, name, type } object for files.
-  form.append('image', { uri: photoUri, name: 'photo.jpg', type: 'image/jpeg' } as unknown as Blob);
+  // Since SDK 58 the global fetch is expo/fetch, which can't send React Native's
+  // { uri, name, type } file objects (it throws before any request goes out).
+  // expo-file-system's File implements Blob, so expo/fetch can read its bytes.
+  form.append('image', new File(photoUri));
   form.append('lat', String(lat));
   form.append('lng', String(lng));
   if (heading !== undefined && heading >= 0) form.append('heading', String(heading));
