@@ -1,13 +1,13 @@
 import { StyleSheet, View } from 'react-native';
 
-import type { MockFeedItem } from '@/api/mock';
+import type { FeedItem } from '@/api/types';
 import { PlaceTile } from '@/components/place-tile';
 import { ThemedText } from '@/components/themed-text';
 import { AccentKeys, Fonts, OnAccent, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 /** One "a friend saved this place" item in the Home feed. */
-export function FriendFeedItem({ item }: { item: MockFeedItem }) {
+export function FriendFeedItem({ item }: { item: FeedItem }) {
   const theme = useTheme();
   const avatarAccent = AccentKeys[item.friend.id % AccentKeys.length];
 
@@ -24,7 +24,7 @@ export function FriendFeedItem({ item }: { item: MockFeedItem }) {
           {item.saved.visited ? ' went here' : ' wants to go'}
         </ThemedText>
         <ThemedText type="small" themeColor="textSecondary">
-          {timeAgo(item.saved.created_at)}
+          {timeAgo(item.feed_at)}
         </ThemedText>
       </View>
       <PlaceTile place={item.saved.place} saved={item.saved} />

@@ -1,53 +1,74 @@
 import { StyleSheet, View } from 'react-native';
 
-import { EmptyState } from '@/components/empty-state';
+import { getProfile } from '@/api/social';
+import { Button } from '@/components/button';
 import { Screen } from '@/components/screen';
+import { SignInPrompt } from '@/components/sign-in-prompt';
 import { ThemedText } from '@/components/themed-text';
-import { Spacing } from '@/constants/theme';
+import { AccentKeys, OnAccent, Spacing } from '@/constants/theme';
+import { useAuth } from '@/hooks/use-auth';
+import { useRequest } from '@/hooks/use-request';
 import { useTheme } from '@/hooks/use-theme';
 
-const STATS = [
-  { label: 'Friends', value: 0 },
-  { label: 'Saved', value: 0 },
-  { label: 'Visited', value: 0 },
-];
-
+// Step 13 adds my visible saved places, edit and settings; step 16 adds friend requests.
 export default function ProfileScreen() {
   const theme = useTheme();
+  const { status, user, logout } = useAuth();
+  const profile = useRequest(user ? `profile:${user.id}` : null, () => getProfile(user?.id ?? 0));
+
+  const accent = AccentKeys[(user?.id ?? 1) % AccentKeys.length];
+  const counts = profile.data?.counts;
+  const stats = [
+    { label: 'Friends', value: counts?.friends },
+    { label: 'Saved', value: counts?.saved },
+    { label: 'Visited', value: counts?.visited },
+  ];
 
   return (
     <Screen title="Profile">
       <View style={styles.identity}>
-        <View style={[styles.avatar, { backgroundColor: theme.blue }]}>
-          <ThemedText type="subtitle" style={{ color: theme.onBlue }}>
-            ?
+        <View style={[styles.avatar, { backgroundColor: user ? theme[accent] : theme.blue }]}>
+          <ThemedText type="subtitle" style={{ color: theme[OnAccent[user ? accent : 'blue']] }}>
+            {user ? user.username.slice(0, 1).toUpperCase() : '?'}
           </ThemedText>
         </View>
         <View style={styles.names}>
-          <ThemedText type="subtitle">Guest</ThemedText>
+          <ThemedText type="subtitle">{user ? user.username : 'Guest'}</ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
-            Not logged in
+            {user ? user.email || 'Logged in' : 'Not logged in'}
           </ThemedText>
         </View>
       </View>
 
-      <View style={[styles.stats, { backgroundColor: theme.backgroundElement }]}>
-        {STATS.map((stat) => (
-          <View key={stat.label} style={styles.stat}>
-            <ThemedText type="subtitle">{stat.value}</ThemedText>
-            <ThemedText type="small" themeColor="textSecondary">
-              {stat.label}
-            </ThemedText>
+      {user ? (
+        <>
+          <View style={[styles.stats, { backgroundColor: theme.backgroundElement }]}>
+            {stats.map((stat) => (
+              <View key={stat.label} style={styles.stat}>
+                <ThemedText type="subtitle">{stat.value ?? '–'}</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary">
+                  {stat.label}
+                </ThemedText>
+              </View>
+            ))}
           </View>
-        ))}
-      </View>
-
-      <EmptyState
-        accent="green"
-        icon={{ ios: 'person.crop.circle', android: 'account_circle', web: 'account_circle' }}
-        title="Log in to see your profile"
-        body="This is what other people see when they look you up: your stats and the places you've shared."
-      />
+          {profile.error ? (
+            <ThemedText type="small" themeColor="textSecondary">
+              {"Couldn't load your stats. "}
+              <ThemedText type="smallBold" style={{ color: theme.tint }} onPress={profile.retry}>
+                Try again
+              </ThemedText>
+            </ThemedText>
+          ) : null}
+          <Button variant="plain" label="Log out" onPress={logout} />
+        </>
+      ) : status === 'signedOut' ? (
+        <SignInPrompt
+          accent="green"
+          title="Log in to see your profile"
+          body="This is what other people see when they look you up: your stats and the places you've shared."
+        />
+      ) : null}
     </Screen>
   );
 }

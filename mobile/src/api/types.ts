@@ -23,6 +23,8 @@ export type PlaceDetail = {
   hours: string[] | null;
   nearest_t: NearestT | null;
   friends_interested: number;
+  /** Whether I've marked interest. Always false when logged out. */
+  interested: boolean;
   saved: SavedInfo | null;
 };
 
@@ -41,10 +43,17 @@ export type Tag = {
   name: string;
 };
 
-/** One item from GET /api/saved/ */
+/** The place inside a saved place. price_range is only known once its card has been opened. */
+export type SavedPlaceSummary = PlaceSummary & {
+  price_range: string | null;
+  /** Google place types, e.g. "restaurant", "museum". Empty for Wikipedia-only places. */
+  types: string[];
+};
+
+/** One item from GET /api/saved/ (and /api/users/<id>/saved/, /api/feed/) */
 export type SavedPlace = {
   id: number;
-  place: PlaceSummary;
+  place: SavedPlaceSummary;
   visited: boolean;
   visited_at: string | null;
   note: string;
@@ -73,4 +82,54 @@ export type IdentifyResponse = {
   place: PlaceSummary | null;
   candidates: PlaceSummary[];
   confidence: number;
+};
+
+// --- Accounts (Phase 2) ----------------------------------------------------
+
+/** GET /api/me/, and the `user` in the login / register response. */
+export type User = {
+  id: number;
+  username: string;
+  email: string;
+};
+
+/** POST /api/auth/login/ and /api/auth/register/ */
+export type AuthResponse = {
+  token: string;
+  user: User;
+};
+
+/** GET /api/saved/ */
+export type SavedListResponse = {
+  results: SavedPlace[];
+};
+
+// --- Social (Phase 3) -------------------------------------------------------
+
+export type UserSummary = {
+  id: number;
+  username: string;
+};
+
+/** From my side of the friendship. */
+export type Friendship = 'self' | 'friends' | 'request_sent' | 'request_received' | 'none';
+
+/** GET /api/users/<id>/ */
+export type Profile = UserSummary & {
+  friendship: Friendship;
+  /** saved / visited only count what I'm allowed to see (everything on my own profile). */
+  counts: { friends: number; saved: number; visited: number };
+};
+
+/** One item from GET /api/feed/ */
+export type FeedItem = {
+  friend: UserSummary;
+  saved: SavedPlace;
+  /** The later of when it was saved and when it was marked visited. */
+  feed_at: string;
+};
+
+/** GET /api/feed/ */
+export type FeedResponse = {
+  results: FeedItem[];
 };

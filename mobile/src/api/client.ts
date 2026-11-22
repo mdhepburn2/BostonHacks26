@@ -20,7 +20,7 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 export type ApiErrorKind =
   /** 400: bad input. `message` is the server's explanation, safe to show. */
   | 'bad_request'
-  /** 401: not logged in (Phase 2+). Send the user to login. */
+  /** 401: not logged in. Send the user to login. */
   | 'unauthorized'
   /** 404: unknown, or not visible to this user. */
   | 'not_found'
@@ -38,6 +38,22 @@ export class ApiError extends Error {
     this.kind = kind;
     this.status = status;
   }
+}
+
+// --- Auth token ----------------------------------------------------------
+// The auth hook (src/hooks/use-auth.tsx) owns logging in and out and keeping the token in
+// secure storage. The client just holds the current one and sends it on every request.
+
+let authToken: string | null = null;
+let onUnauthorized: (() => void) | null = null;
+
+export function setAuthToken(token: string | null) {
+  authToken = token;
+}
+
+/** Called when the server rejects our token (expired, or the user was deleted). */
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  onUnauthorized = handler;
 }
 
 const UNAVAILABLE_MESSAGE = "Couldn't reach the server. Check your connection and try again.";
@@ -60,6 +76,8 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   const { method = 'GET', query, body, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
 
   const headers: Record<string, string> = { Accept: 'application/json' };
+  const sentToken = authToken;
+  if (sentToken) headers.Authorization = `Token ${sentToken}`;
   let payload: string | FormData | undefined;
   if (body instanceof FormData) {
     // Don't set Content-Type: fetch has to add the multipart boundary itself.
@@ -96,6 +114,8 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     case 400:
       throw new ApiError('bad_request', message ?? 'Something about that request was off.', 400);
     case 401:
+      // A stale token makes even the public endpoints fail, so drop it and log out.
+      if (sentToken && sentToken === authToken) onUnauthorized?.();
       throw new ApiError('unauthorized', message ?? 'Please log in.', 401);
     case 404:
       throw new ApiError('not_found', message ?? 'Not found.', 404);

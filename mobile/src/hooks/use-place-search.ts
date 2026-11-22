@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '@/api/client';
-import { searchPlaces } from '@/api/places';
+import { searchPlaces, type Coords } from '@/api/places';
 import type { SearchResult } from '@/api/types';
 
 const DEBOUNCE_MS = 400;
@@ -30,9 +30,16 @@ export type PlaceSearch = {
 /**
  * Searches places by name as the user types. Waits until typing pauses, skips very short
  * queries, and ignores responses for queries the user has already typed past.
+ *
+ * Pass `coords` (null if location isn't allowed) to rank nearby places higher. A new
+ * position doesn't trigger a new search; the next one just uses it.
  */
-export function usePlaceSearch(query: string): PlaceSearch {
+export function usePlaceSearch(query: string, coords: Coords | null): PlaceSearch {
   const q = query.trim();
+  const coordsRef = useRef(coords);
+  useEffect(() => {
+    coordsRef.current = coords;
+  }, [coords]);
   const [fetched, setFetched] = useState<Fetched>({ q: '', results: [], error: null, loading: false });
   const [attempt, setAttempt] = useState(0);
 
@@ -42,9 +49,7 @@ export function usePlaceSearch(query: string): PlaceSearch {
 
     const timer = setTimeout(() => {
       setFetched((prev) => ({ ...prev, loading: true, error: null }));
-      // TODO(step 6): pass the user's lat/lng here once the location hook exists, so nearby
-      // places rank higher. Leave both out if permission wasn't granted.
-      searchPlaces(q)
+      searchPlaces(q, coordsRef.current ?? undefined)
         .then((res) => {
           if (!stale) setFetched({ q, results: res.results, error: null, loading: false });
         })

@@ -10,6 +10,7 @@ import { SearchResultRow } from '@/components/search-result-row';
 import { SegmentedControl } from '@/components/segmented-control';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
+import { useLocation } from '@/hooks/use-location';
 import { usePlaceSearch } from '@/hooks/use-place-search';
 import { useTheme } from '@/hooks/use-theme';
 
@@ -46,7 +47,9 @@ function PlacesSearch({
   onChangeQuery: (query: string) => void;
 }) {
   const theme = useTheme();
-  const search = usePlaceSearch(query);
+  // Only used if location is already allowed (Scan asks for it); Search never prompts.
+  const { coords } = useLocation();
+  const search = usePlaceSearch(query, coords);
 
   let body;
   if (search.idle) {

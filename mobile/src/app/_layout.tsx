@@ -11,6 +11,7 @@ import { useEffect } from 'react';
 
 import { BASE_URL, checkHealth } from '@/api/client';
 import { Colors, Fonts } from '@/constants/theme';
+import { AuthProvider } from '@/hooks/use-auth';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 // Keep the splash screen up until the fonts are ready, so text doesn't flash in the
@@ -59,20 +60,24 @@ export default function RootLayout() {
   if (!fontsLoaded && !fontError) return null;
 
   return (
-    <ThemeProvider value={theme}>
-      <Stack
-        screenOptions={{
-          headerTintColor: colors.tint,
-          headerTitleStyle: { color: colors.text, fontFamily: Fonts.displayBold },
-          headerBackTitleStyle: { fontFamily: Fonts.bodyMedium },
-        }}>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="place/[id]" options={{ title: 'Place', headerBackTitle: 'Back' }} />
-        <Stack.Screen
-          name="scan"
-          options={{ presentation: 'fullScreenModal', headerShown: false }}
-        />
-      </Stack>
-    </ThemeProvider>
+    <AuthProvider>
+      <ThemeProvider value={theme}>
+        <Stack
+          screenOptions={{
+            headerTintColor: colors.tint,
+            headerTitleStyle: { color: colors.text, fontFamily: Fonts.displayBold },
+            headerBackTitleStyle: { fontFamily: Fonts.bodyMedium },
+          }}>
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="place/[id]" options={{ title: 'Place', headerBackTitle: 'Back' }} />
+          <Stack.Screen
+            name="scan"
+            options={{ presentation: 'fullScreenModal', headerShown: false }}
+          />
+          <Stack.Screen name="login" options={{ presentation: 'modal', title: '' }} />
+          <Stack.Screen name="register" options={{ presentation: 'modal', title: '' }} />
+        </Stack>
+      </ThemeProvider>
+    </AuthProvider>
   );
 }
