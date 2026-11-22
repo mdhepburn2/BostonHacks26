@@ -2,11 +2,15 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import type { Coords, IdentifyInput } from '@/api/places';
+import { ApiError } from '@/api/client';
+import { identify, type Coords, type IdentifyInput } from '@/api/places';
+import type { IdentifyResponse, PlaceSummary } from '@/api/types';
+import { Button } from '@/components/button';
+import { CandidateList } from '@/components/candidate-list';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useHeading } from '@/hooks/use-heading';
@@ -15,6 +19,9 @@ import { useTheme } from '@/hooks/use-theme';
 
 /** The API resizes to 1024px anyway, so a smaller upload is just faster. */
 const PHOTO_QUALITY = 0.5;
+
+/** The API sends up to 3 candidates; the contract says to show at most 3. */
+const MAX_CANDIDATES = 3;
 
 // The camera is always on black, in light and dark mode alike.
 const ON_CAMERA = '#FFFFFF';
@@ -86,9 +93,39 @@ function Viewfinder({ coords }: { coords: Coords | null }) {
   const heading = useHeading(true);
   const [ready, setReady] = useState(false);
   const [taking, setTaking] = useState(false);
-  const [shot, setShot] = useState<IdentifyInput | null>(null);
+  const [scan, setScan] = useState<ScanState>({ step: 'live' });
+  // Bumped on every new request and on retake, so a late answer for an old photo is ignored.
+  const requestId = useRef(0);
+  // Closing the camera mid-scan must not jump to a place card when the answer arrives later.
+  useEffect(
+    () => () => {
+      requestId.current++;
+    },
+    [],
+  );
 
-  const canShoot = ready && coords !== null && !taking;
+  const canShoot = ready && coords !== null && !taking && scan.step === 'live';
+
+  const send = async (shot: IdentifyInput) => {
+    const id = ++requestId.current;
+    setScan({ step: 'identifying', shot });
+    try {
+      const result = await identify(shot);
+      if (id !== requestId.current) return;
+      if (result.status === 'matched' && result.place) {
+        openPlace(result.place.id);
+        return;
+      }
+      setScan({ step: 'result', shot, result });
+    } catch (err) {
+      if (id !== requestId.current) return;
+      const error =
+        err instanceof ApiError
+          ? err
+          : new ApiError('unavailable', 'Something went wrong. Please try again.', null);
+      setScan({ step: 'error', shot, error });
+    }
+  };
 
   const takePhoto = async () => {
     if (!cameraRef.current || !coords) return;
@@ -99,8 +136,7 @@ function Viewfinder({ coords }: { coords: Coords | null }) {
         shutterSound: false,
       });
       // Grab where we are and which way we're facing at the moment of the shot.
-      setShot({ photoUri: photo.uri, lat: coords.lat, lng: coords.lng, heading: heading.current });
-      // TODO(step 7): send `shot` to identify() and route on matched / ambiguous / not_found.
+      void send({ photoUri: photo.uri, lat: coords.lat, lng: coords.lng, heading: heading.current });
     } catch {
       // The camera wasn't ready or was torn down mid-shot; let them try again.
     } finally {
@@ -108,9 +144,12 @@ function Viewfinder({ coords }: { coords: Coords | null }) {
     }
   };
 
-  let status: string | null = null;
-  if (!coords) status = 'Finding your location...';
-  else if (shot) status = 'Photo taken. Identifying is coming next.';
+  const retake = () => {
+    requestId.current++;
+    setScan({ step: 'live' });
+  };
+
+  const shot = scan.step === 'live' ? null : scan.shot;
 
   return (
     <View style={styles.fill}>
@@ -126,42 +165,136 @@ function Viewfinder({ coords }: { coords: Coords | null }) {
         />
       )}
 
-      <View style={[styles.controls, { paddingBottom: insets.bottom + Spacing.four }]}>
-        {status ? (
-          <View style={styles.pill}>
-            {!coords ? <ActivityIndicator size="small" color={ON_CAMERA} /> : null}
-            <ThemedText type="small" style={styles.onCamera}>
-              {status}
-            </ThemedText>
-          </View>
-        ) : null}
-
-        {shot ? (
-          <Pressable
-            onPress={() => setShot(null)}
-            accessibilityRole="button"
-            style={({ pressed }) => [styles.retake, pressed && styles.pressed]}>
-            <ThemedText type="smallBold" style={styles.onCamera}>
-              Retake
-            </ThemedText>
-          </Pressable>
-        ) : (
-          <Pressable
-            onPress={takePhoto}
-            disabled={!canShoot}
-            accessibilityRole="button"
-            accessibilityLabel="Take photo"
-            accessibilityState={{ disabled: !canShoot }}
-            style={({ pressed }) => [
-              styles.shutter,
-              !canShoot && styles.disabled,
-              pressed && styles.pressed,
-            ]}>
-            <View style={[styles.shutterInner, { backgroundColor: theme.tint }]}>
-              {taking ? <ActivityIndicator color={ON_CAMERA} /> : null}
+      {scan.step === 'result' || scan.step === 'error' ? (
+        <View
+          style={[
+            styles.sheet,
+            { backgroundColor: theme.background, paddingBottom: insets.bottom + Spacing.three },
+          ]}>
+          {scan.step === 'result' ? (
+            <ResultPanel result={scan.result} onRetake={retake} />
+          ) : (
+            <ErrorPanel error={scan.error} onRetry={() => send(scan.shot)} onRetake={retake} />
+          )}
+        </View>
+      ) : (
+        <View style={[styles.controls, { paddingBottom: insets.bottom + Spacing.four }]}>
+          {scan.step === 'identifying' || !coords ? (
+            <View style={styles.pill} accessibilityLiveRegion="polite">
+              <ActivityIndicator size="small" color={ON_CAMERA} />
+              <ThemedText type="small" style={styles.onCamera}>
+                {scan.step === 'identifying' ? 'Identifying...' : 'Finding your location...'}
+              </ThemedText>
             </View>
-          </Pressable>
-        )}
+          ) : null}
+
+          {scan.step === 'identifying' ? (
+            <Pressable
+              onPress={retake}
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.retake, pressed && styles.pressed]}>
+              <ThemedText type="smallBold" style={styles.onCamera}>
+                Cancel
+              </ThemedText>
+            </Pressable>
+          ) : (
+            <Pressable
+              onPress={takePhoto}
+              disabled={!canShoot}
+              accessibilityRole="button"
+              accessibilityLabel="Take photo"
+              accessibilityState={{ disabled: !canShoot }}
+              style={({ pressed }) => [
+                styles.shutter,
+                !canShoot && styles.disabled,
+                pressed && styles.pressed,
+              ]}>
+              <View style={[styles.shutterInner, { backgroundColor: theme.tint }]}>
+                {taking ? <ActivityIndicator color={ON_CAMERA} /> : null}
+              </View>
+            </Pressable>
+          )}
+        </View>
+      )}
+    </View>
+  );
+}
+
+type ScanState =
+  | { step: 'live' }
+  | { step: 'identifying'; shot: IdentifyInput }
+  | { step: 'result'; shot: IdentifyInput; result: IdentifyResponse }
+  | { step: 'error'; shot: IdentifyInput; error: ApiError };
+
+/** Swap the camera for the place card, so Back goes to where the user started. */
+function openPlace(id: number) {
+  router.replace({ pathname: '/place/[id]', params: { id: String(id) } });
+}
+
+function searchInstead() {
+  close();
+  router.navigate('/search');
+}
+
+/** Up to 3 options: the best guess first, then the other candidates. */
+function pickList(result: IdentifyResponse): PlaceSummary[] {
+  const all = result.place ? [result.place, ...result.candidates] : result.candidates;
+  const seen = new Set<number>();
+  return all.filter((p) => !seen.has(p.id) && seen.add(p.id)).slice(0, MAX_CANDIDATES);
+}
+
+/** Shown for ambiguous and not_found (matched goes straight to the place card). */
+function ResultPanel({ result, onRetake }: { result: IdentifyResponse; onRetake: () => void }) {
+  const options = pickList(result);
+  const ambiguous = result.status === 'ambiguous';
+
+  let title = 'Is it one of these?';
+  let body = 'We narrowed it down. Tap the right one.';
+  if (!ambiguous) {
+    title = "Couldn't tell what this is";
+    body = options.length
+      ? 'It might be one of these places nearby.'
+      : 'Try getting closer, or point straight at the front of the place.';
+  }
+
+  return (
+    <View style={styles.panel}>
+      <View style={styles.panelText}>
+        <ThemedText type="subtitle">{title}</ThemedText>
+        <ThemedText type="small" themeColor="textSecondary">
+          {body}
+        </ThemedText>
+      </View>
+      {options.length ? (
+        <CandidateList candidates={options} onPick={(place) => openPlace(place.id)} />
+      ) : null}
+      <View style={styles.panelActions}>
+        <Button label="Retake photo" onPress={onRetake} />
+        <Button variant="plain" label="Search by name instead" onPress={searchInstead} />
+      </View>
+    </View>
+  );
+}
+
+type ErrorPanelProps = { error: ApiError; onRetry: () => void; onRetake: () => void };
+
+function ErrorPanel({ error, onRetry, onRetake }: ErrorPanelProps) {
+  // 400 means something about the photo or location was off; resending it won't help.
+  const badInput = error.kind === 'bad_request';
+
+  return (
+    <View style={styles.panel}>
+      <View style={styles.panelText}>
+        <ThemedText type="subtitle">
+          {badInput ? "Couldn't scan that" : "Scan isn't working right now"}
+        </ThemedText>
+        <ThemedText type="small" themeColor="textSecondary">
+          {error.message}
+        </ThemedText>
+      </View>
+      <View style={styles.panelActions}>
+        {badInput ? null : <Button label="Try again" onPress={onRetry} />}
+        <Button variant={badInput ? 'primary' : 'plain'} label="Retake photo" onPress={onRetake} />
       </View>
     </View>
   );
@@ -274,6 +407,27 @@ const styles = StyleSheet.create({
     borderRadius: 31,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  sheet: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingTop: Spacing.four,
+    paddingHorizontal: Spacing.three,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderCurve: 'continuous',
+  },
+  panel: {
+    gap: Spacing.three,
+  },
+  panelText: {
+    gap: Spacing.one,
+  },
+  panelActions: {
+    gap: Spacing.one,
+    marginTop: Spacing.one,
   },
   retake: {
     minHeight: 48,
