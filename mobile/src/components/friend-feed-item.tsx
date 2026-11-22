@@ -34,7 +34,11 @@ export function FriendFeedItem({ item }: { item: FeedItem }) {
           {timeAgo(item.feed_at)}
         </ThemedText>
       </Pressable>
-      <PlaceTile place={item.saved.place} saved={item.saved} />
+      <PlaceTile
+        place={item.saved.place}
+        saved={item.saved}
+        friendSave={{ savedPlaceId: item.saved.id, friend: item.friend.username }}
+      />
     </View>
   );
 }

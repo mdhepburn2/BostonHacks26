@@ -1,12 +1,13 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { StyleSheet, TextInput, View, type TextInputProps } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { Button } from '@/components/button';
 import { Screen } from '@/components/screen';
+import { TextField } from '@/components/text-field';
 import { ThemedText } from '@/components/themed-text';
-import { Fonts, Spacing } from '@/constants/theme';
+import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 
@@ -50,7 +51,7 @@ export function AuthForm({ mode }: AuthFormProps) {
           : 'Welcome back. Pick up where you left off.'
       }>
       <View style={styles.fields}>
-        <Field
+        <TextField
           label="Username"
           value={username}
           onChangeText={setUsername}
@@ -60,7 +61,7 @@ export function AuthForm({ mode }: AuthFormProps) {
           returnKeyType="next"
         />
         {registering ? (
-          <Field
+          <TextField
             label="Email (optional)"
             value={email}
             onChangeText={setEmail}
@@ -70,7 +71,7 @@ export function AuthForm({ mode }: AuthFormProps) {
             textContentType="emailAddress"
           />
         ) : null}
-        <Field
+        <TextField
           label="Password"
           value={password}
           onChangeText={setPassword}
@@ -105,38 +106,9 @@ export function AuthForm({ mode }: AuthFormProps) {
   );
 }
 
-function Field({ label, ...input }: TextInputProps & { label: string }) {
-  const theme = useTheme();
-  return (
-    <View style={styles.field}>
-      <ThemedText type="smallBold" themeColor="textSecondary">
-        {label}
-      </ThemedText>
-      <TextInput
-        {...input}
-        autoCorrect={false}
-        accessibilityLabel={label}
-        placeholderTextColor={theme.textSecondary}
-        style={[styles.input, { backgroundColor: theme.backgroundElement, color: theme.text }]}
-      />
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   fields: {
     gap: Spacing.three,
-  },
-  field: {
-    gap: Spacing.one,
-  },
-  input: {
-    minHeight: 48,
-    paddingHorizontal: Spacing.three,
-    borderRadius: Spacing.three,
-    borderCurve: 'continuous',
-    fontFamily: Fonts.body,
-    fontSize: 16,
   },
   actions: {
     gap: Spacing.two,

@@ -115,6 +115,7 @@ export function ProfileView({ data, username, userId, isMe, email, actions }: Pr
                     place={item.place}
                     saved={item}
                     showVisibility={isMe}
+                    friendSave={isMe ? undefined : { savedPlaceId: item.id, friend: name }}
                   />
                 ))}
               </View>

@@ -1,7 +1,9 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
+import type { PlaceDetail } from '@/api/types';
 import { EmptyState } from '@/components/empty-state';
+import { InterestButton, useInterest, type InterestVia } from '@/components/interest-button';
 import { PlaceCard } from '@/components/place-card';
 import { RetryButton } from '@/components/retry-button';
 import { SavePanel } from '@/components/save-panel';
@@ -13,27 +15,19 @@ import { usePlace } from '@/hooks/use-place';
 import { useTheme } from '@/hooks/use-theme';
 
 export default function PlaceScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  // `via` / `from`: opened from a friend's saved place (Home feed or their profile).
+  const { id, via, from } = useLocalSearchParams<{ id: string; via?: string; from?: string }>();
   const theme = useTheme();
   const { user } = useAuth();
   const { loading, data: place, error, retry } = usePlace(id);
+  const viaId = Number(via);
+  const interestVia: InterestVia | undefined =
+    via && Number.isInteger(viaId) && from ? { savedPlaceId: viaId, friend: from } : undefined;
 
   let body;
   if (place) {
-    body = (
-      <PlaceCard
-        place={place}
-        actions={
-          // Remount on login / logout so the panel starts from the reloaded card.
-          <SavePanel
-            key={`${place.id}:${user?.id ?? 'guest'}`}
-            placeId={place.id}
-            placeName={place.name}
-            initial={place.saved}
-          />
-        }
-      />
-    );
+    // Remount on login / logout so the panels start from the reloaded card.
+    body = <LoadedPlace key={`${place.id}:${user?.id ?? 'guest'}`} place={place} via={interestVia} />;
   } else if (loading) {
     body = (
       <View style={styles.loading}>
@@ -76,6 +70,38 @@ export default function PlaceScreen() {
   return <Screen>{body}</Screen>;
 }
 
+function LoadedPlace({ place, via }: { place: PlaceDetail; via?: InterestVia }) {
+  const interest = useInterest(place, via);
+  const theme = useTheme();
+
+  return (
+    <PlaceCard
+      place={place}
+      actions={<SavePanel placeId={place.id} placeName={place.name} initial={place.saved} />}
+      friendsInterested={interest.friendsInterested}
+      interest={
+        <View style={styles.interest}>
+          <View style={styles.interestRow}>
+            <InterestButton state={interest} />
+            {via ? (
+              <ThemedText type="small" themeColor="textSecondary" style={styles.via}>
+                {'From '}
+                <ThemedText type="smallBold">{via.friend}</ThemedText>
+                {"'s saved places"}
+              </ThemedText>
+            ) : null}
+          </View>
+          {interest.error ? (
+            <ThemedText type="small" style={{ color: theme.tint }} accessibilityLiveRegion="polite">
+              {interest.error}
+            </ThemedText>
+          ) : null}
+        </View>
+      }
+    />
+  );
+}
+
 function BackButton() {
   const theme = useTheme();
   return (
@@ -98,6 +124,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: Spacing.two,
     paddingVertical: Spacing.six,
+  },
+  interest: {
+    gap: Spacing.two,
+    marginTop: -Spacing.two,
+  },
+  interestRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+  },
+  via: {
+    flex: 1,
   },
   back: {
     minHeight: 44,

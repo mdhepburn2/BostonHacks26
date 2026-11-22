@@ -1,9 +1,9 @@
 import { SymbolView } from 'expo-symbols';
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
-import { sendFriendRequest } from '@/api/social';
+import { declineFriendRequest, getFriendRequests, sendFriendRequest, unfriend } from '@/api/social';
 import type { Friendship } from '@/api/types';
 import { Button } from '@/components/button';
 import { ThemedText } from '@/components/themed-text';
@@ -11,45 +11,86 @@ import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 type FriendButtonProps = {
+  userId: number;
   username: string;
   friendship: Friendship;
-  /** Called after a request is sent or accepted, to reload the profile. */
+  /** Called after any change (sent, accepted, declined, unfriended) to reload the profile. */
   onChanged: () => void;
 };
 
 /**
- * Add friend / Request sent / Accept / Friends, from my side of the friendship. Accepting
- * re-sends a request, which the API turns into accepting theirs. Decline and unfriend come
- * with step 16.
+ * Add friend / Request sent / Accept or Decline / Friends (tap to unfriend), from my side of
+ * the friendship. Accepting re-sends a request, which the API turns into accepting theirs.
  */
-export function FriendButton({ username, friendship, onChanged }: FriendButtonProps) {
+export function FriendButton({ userId, username, friendship, onChanged }: FriendButtonProps) {
   const theme = useTheme();
   // What the last request here returned, until the reloaded profile catches up.
   const [local, setLocal] = useState<Friendship | null>(null);
-  const [sending, setSending] = useState(false);
+  const [busy, setBusy] = useState<'send' | 'decline' | 'unfriend' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const status = local ?? friendship;
 
-  const send = async () => {
-    setSending(true);
+  /** Runs one change, shows what it led to straight away, then reloads the profile. */
+  const run = async (kind: NonNullable<typeof busy>, action: () => Promise<Friendship>) => {
+    setBusy(kind);
     setError(null);
     try {
-      const res = await sendFriendRequest(username);
-      setLocal(res.status === 'accepted' ? 'friends' : 'request_sent');
+      setLocal(await action());
       onChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
     } finally {
-      setSending(false);
+      setBusy(null);
     }
   };
+
+  const send = () =>
+    run('send', async () => {
+      const res = await sendFriendRequest(username);
+      return res.status === 'accepted' ? 'friends' : 'request_sent';
+    });
+
+  const decline = () =>
+    run('decline', async () => {
+      // The profile only says they asked; find their request to get its id.
+      const { results } = await getFriendRequests();
+      const theirs = results.find((req) => req.from_user.id === userId);
+      if (theirs) await declineFriendRequest(theirs.id);
+      return 'none';
+    });
+
+  const confirmUnfriend = () =>
+    Alert.alert(
+      `Unfriend ${username}?`,
+      "You'll stop seeing each other's friends-only places, and you'll each be removed from circles the other owns.",
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unfriend',
+          style: 'destructive',
+          onPress: () =>
+            void run('unfriend', async () => {
+              await unfriend(userId);
+              return 'none';
+            }),
+        },
+      ],
+    );
 
   if (status === 'self') return null;
 
   let control;
   if (status === 'friends') {
     control = (
-      <View style={[styles.badge, { backgroundColor: theme.green }]}>
+      <Pressable
+        onPress={confirmUnfriend}
+        disabled={busy !== null}
+        accessibilityRole="button"
+        accessibilityLabel={`Friends with ${username}. Double tap to unfriend.`}
+        style={({ pressed }) => [
+          styles.badge,
+          { backgroundColor: theme.green, opacity: busy || pressed ? 0.7 : 1 },
+        ]}>
         <SymbolView
           name={{ ios: 'person.crop.circle.badge.checkmark', android: 'how_to_reg', web: 'how_to_reg' }}
           size={18}
@@ -58,7 +99,13 @@ export function FriendButton({ username, friendship, onChanged }: FriendButtonPr
         <ThemedText type="smallBold" style={{ color: theme.onGreen }}>
           Friends
         </ThemedText>
-      </View>
+        <SymbolView
+          name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }}
+          size={12}
+          weight="bold"
+          tintColor={theme.onGreen}
+        />
+      </Pressable>
     );
   } else if (status === 'request_sent') {
     control = (
@@ -79,11 +126,23 @@ export function FriendButton({ username, friendship, onChanged }: FriendButtonPr
         <ThemedText type="small" themeColor="textSecondary">
           {`${username} wants to be friends.`}
         </ThemedText>
-        <Button label="Accept friend request" onPress={send} loading={sending} />
+        <Button
+          label="Accept friend request"
+          onPress={send}
+          loading={busy === 'send'}
+          disabled={busy !== null}
+        />
+        <Button
+          variant="plain"
+          label="Decline"
+          onPress={decline}
+          loading={busy === 'decline'}
+          disabled={busy !== null}
+        />
       </>
     );
   } else {
-    control = <Button label="Add friend" onPress={send} loading={sending} />;
+    control = <Button label="Add friend" onPress={send} loading={busy === 'send'} />;
   }
 
   return (

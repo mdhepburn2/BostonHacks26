@@ -171,3 +171,21 @@ export type FriendRequest = {
   status: 'pending' | 'accepted' | 'declined';
   created_at: string;
 };
+
+/** GET /api/friends/requests/: pending requests sent to me, newest first. */
+export type FriendRequestsResponse = {
+  results: FriendRequest[];
+};
+
+/** POST /api/places/<id>/interest/: the live state for the card's button and count. */
+export type InterestResponse = {
+  interested: true;
+  /** The friend's saved place this interest came from, if any. */
+  via_saved_place_id: number | null;
+  friends_interested: number;
+};
+
+/** GET /api/friends/: my friends, A to Z. */
+export type FriendsResponse = {
+  results: UserSummary[];
+};

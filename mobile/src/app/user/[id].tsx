@@ -58,6 +58,7 @@ function UserProfile({ userId, isMe }: { userId: number; isMe: boolean }) {
             <FriendButton
               // Start fresh if the profile's friendship changes underneath (e.g. after refresh).
               key={profile.friendship}
+              userId={userId}
               username={profile.username}
               friendship={profile.friendship}
               onChanged={data.refresh}

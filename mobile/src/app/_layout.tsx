@@ -71,6 +71,14 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="place/[id]" options={{ title: 'Place', headerBackTitle: 'Back' }} />
           <Stack.Screen name="user/[id]" options={{ title: 'Profile', headerBackTitle: 'Back' }} />
+          <Stack.Screen name="friends" options={{ title: 'Friends', headerBackTitle: 'Back' }} />
+          <Stack.Screen name="circles/index" options={{ title: 'Circles', headerBackTitle: 'Back' }} />
+          <Stack.Screen name="circles/[id]" options={{ title: 'Circle', headerBackTitle: 'Back' }} />
+          <Stack.Screen name="circles/new" options={{ presentation: 'modal', title: '' }} />
+          <Stack.Screen
+            name="requests"
+            options={{ title: 'Friend requests', headerBackTitle: 'Back' }}
+          />
           <Stack.Screen
             name="scan"
             options={{ presentation: 'fullScreenModal', headerShown: false }}

@@ -11,9 +11,18 @@ type ButtonProps = {
   variant?: 'primary' | 'plain';
   loading?: boolean;
   disabled?: boolean;
+  /** "small" fits inline in a row, e.g. Accept / Decline. */
+  size?: 'regular' | 'small';
 };
 
-export function Button({ label, onPress, variant = 'primary', loading, disabled }: ButtonProps) {
+export function Button({
+  label,
+  onPress,
+  variant = 'primary',
+  loading,
+  disabled,
+  size = 'regular',
+}: ButtonProps) {
   const theme = useTheme();
   const primary = variant === 'primary';
   const inactive = disabled || loading;
@@ -26,6 +35,7 @@ export function Button({ label, onPress, variant = 'primary', loading, disabled 
       accessibilityState={{ disabled: inactive, busy: loading }}
       style={({ pressed }) => [
         styles.base,
+        size === 'small' && styles.small,
         primary && [styles.primary, { backgroundColor: theme.tint }],
         { opacity: disabled ? 0.5 : pressed ? 0.8 : 1 },
       ]}>
@@ -46,6 +56,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: Spacing.four,
+  },
+  small: {
+    minHeight: 36,
+    paddingHorizontal: Spacing.three,
   },
   primary: {
     borderRadius: 24,

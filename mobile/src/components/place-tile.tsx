@@ -19,6 +19,8 @@ type PlaceTileProps = {
   onToggleVisited?: () => void;
   /** A change to this saved place is being sent; dims the tile. */
   pending?: boolean;
+  /** A friend's saved place: the card it opens credits them when I mark interest. */
+  friendSave?: { savedPlaceId: number; friend: string };
 };
 
 const VISIBILITY_ICONS: Record<Visibility, SymbolViewProps['name']> = {
@@ -36,6 +38,7 @@ export function PlaceTile({
   showVisibility,
   onToggleVisited,
   pending,
+  friendSave,
 }: PlaceTileProps) {
   const theme = useTheme();
   const { accent, shape } = placeAccents(place.id);
@@ -45,7 +48,14 @@ export function PlaceTile({
 
   return (
     <Pressable
-      onPress={() => router.push({ pathname: '/place/[id]', params: { id: String(place.id) } })}
+      onPress={() =>
+        router.push({
+          pathname: '/place/[id]',
+          params: friendSave
+            ? { id: String(place.id), via: String(friendSave.savedPlaceId), from: friendSave.friend }
+            : { id: String(place.id) },
+        })
+      }
       accessibilityRole="button"
       accessibilityLabel={`Open ${place.name}`}
       style={({ pressed }) => ({ opacity: pending ? 0.5 : pressed ? 0.85 : 1 })}>

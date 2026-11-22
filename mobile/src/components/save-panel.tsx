@@ -1,12 +1,12 @@
 import { DateTimePicker } from '@expo/ui/community/datetime-picker';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Alert, Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { savePlace, unsave, updateSaved, type SavedChanges } from '@/api/saved';
-import { getCircles } from '@/api/social';
+import { getCircles } from '@/api/circles';
 import type { SavedInfo, SavedPlace, Visibility } from '@/api/types';
 import { Button } from '@/components/button';
 import { Loadable } from '@/components/loadable';
@@ -16,6 +16,7 @@ import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useRequest } from '@/hooks/use-request';
 import { useTheme } from '@/hooks/use-theme';
+import { onCircleCreated } from '@/utils/circle-created';
 import { formatDate, fromIsoDate, toIsoDate } from '@/utils/dates';
 
 const SHARING_OPTIONS: readonly { value: Visibility; label: string }[] = [
@@ -171,6 +172,27 @@ function SharingPicker({ visibility, circleId, busy, disabled, onChange }: Shari
 
   const selected: Visibility = choosingCircle ? 'circle' : visibility;
 
+  // "New circle" opens a sheet; when it reports the circle it made, share with it right away.
+  // Coming back to this screen (made or cancelled) stops listening.
+  const [awaitingCircle, setAwaitingCircle] = useState(false);
+  const refreshCircles = circles.refresh;
+  useEffect(() => {
+    if (!awaitingCircle) return;
+    return onCircleCreated((circle) => {
+      setAwaitingCircle(false);
+      setChoosingCircle(false);
+      refreshCircles();
+      onChange({ visibility: 'circle', circle_id: circle.id });
+    });
+  }, [awaitingCircle, onChange, refreshCircles]);
+  useFocusEffect(useCallback(() => setAwaitingCircle(false), []));
+
+  const newCircle = () => {
+    if (disabled) return;
+    setAwaitingCircle(true);
+    router.push('/circles/new');
+  };
+
   return (
     <View style={[styles.group, busy && styles.pending]}>
       <ThemedText type="smallBold" themeColor="textSecondary">
@@ -193,50 +215,85 @@ function SharingPicker({ visibility, circleId, busy, disabled, onChange }: Shari
       {showCircles ? (
         <Loadable state={circles} loadingLabel="Loading your circles..." errorTitle="Couldn't load your circles">
           {({ results }) =>
-            results.length ? (
-              <View style={styles.circles}>
-                {results.map((circle) => {
-                  const active = visibility === 'circle' && circle.id === circleId;
-                  return (
-                    <Pressable
-                      key={circle.id}
-                      onPress={() => {
-                        if (disabled || active) return;
-                        setChoosingCircle(false);
-                        onChange({ visibility: 'circle', circle_id: circle.id });
-                      }}
-                      accessibilityRole="radio"
-                      accessibilityState={{ checked: active }}
-                      style={({ pressed }) => [
-                        styles.circleChip,
-                        { borderColor: active ? theme.text : theme.backgroundSelected },
-                        active && { backgroundColor: theme.text },
-                        pressed && styles.pending,
-                      ]}>
-                      <ThemedText
-                        type="smallBold"
-                        style={{ color: active ? theme.background : theme.text }}>
-                        {circle.name}
-                      </ThemedText>
-                      <ThemedText
-                        type="small"
-                        style={{ color: active ? theme.background : theme.textSecondary }}>
-                        {circle.members.length}
-                      </ThemedText>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            ) : (
-              <ThemedText type="small" themeColor="textSecondary">
-                You&apos;re not in any circles yet. Circles are small groups of friends you make
-                plans with.
-              </ThemedText>
-            )
+            <View style={styles.circleGroup}>
+              {results.length ? (
+                <View style={styles.circles}>
+                  {results.map((circle) => {
+                    const active = visibility === 'circle' && circle.id === circleId;
+                    return (
+                      <Pressable
+                        key={circle.id}
+                        onPress={() => {
+                          if (disabled || active) return;
+                          setChoosingCircle(false);
+                          onChange({ visibility: 'circle', circle_id: circle.id });
+                        }}
+                        accessibilityRole="radio"
+                        accessibilityState={{ checked: active }}
+                        style={({ pressed }) => [
+                          styles.circleChip,
+                          { borderColor: active ? theme.text : theme.backgroundSelected },
+                          active && { backgroundColor: theme.text },
+                          pressed && styles.pending,
+                        ]}>
+                        <ThemedText
+                          type="smallBold"
+                          style={{ color: active ? theme.background : theme.text }}>
+                          {circle.name}
+                        </ThemedText>
+                        <ThemedText
+                          type="small"
+                          style={{ color: active ? theme.background : theme.textSecondary }}>
+                          {circle.members.length}
+                        </ThemedText>
+                      </Pressable>
+                    );
+                  })}
+                  <NewCircleChip onPress={newCircle} />
+                </View>
+              ) : (
+                <>
+                  <ThemedText type="small" themeColor="textSecondary">
+                    You&apos;re not in any circles yet. Make one with just the friends who should
+                    see this place.
+                  </ThemedText>
+                  <View style={styles.circles}>
+                    <NewCircleChip onPress={newCircle} />
+                  </View>
+                </>
+              )}
+            </View>
           }
         </Loadable>
       ) : null}
     </View>
+  );
+}
+
+/** Dashed "+ New circle" chip at the end of the circle list. */
+function NewCircleChip({ onPress }: { onPress: () => void }) {
+  const theme = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel="New circle"
+      style={({ pressed }) => [
+        styles.circleChip,
+        styles.newCircleChip,
+        { borderColor: theme.tint },
+        pressed && styles.pending,
+      ]}>
+      <SymbolView
+        name={{ ios: 'plus', android: 'add', web: 'add' }}
+        size={12}
+        weight="bold"
+        tintColor={theme.tint}
+      />
+      <ThemedText type="smallBold" style={{ color: theme.tint }}>
+        New circle
+      </ThemedText>
+    </Pressable>
   );
 }
 
@@ -350,6 +407,9 @@ const styles = StyleSheet.create({
   group: {
     gap: Spacing.two,
   },
+  circleGroup: {
+    gap: Spacing.two,
+  },
   circles: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -363,6 +423,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.three,
     borderRadius: 20,
     borderWidth: 2,
+  },
+  newCircleChip: {
+    gap: Spacing.one,
+    borderStyle: 'dashed',
   },
   visitedRow: {
     flexDirection: 'row',

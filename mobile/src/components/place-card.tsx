@@ -18,13 +18,18 @@ type PlaceCardProps = {
   place: PlaceDetail;
   /** Shown right under the big colour block, e.g. the Save panel. */
   actions?: ReactNode;
+  /** Live count after marking interest; defaults to the card's own count. */
+  friendsInterested?: number;
+  /** Shown under the "friends want to go" row, e.g. the Interested button. */
+  interest?: ReactNode;
 };
 
-export function PlaceCard({ place, actions }: PlaceCardProps) {
+export function PlaceCard({ place, actions, friendsInterested, interest }: PlaceCardProps) {
   const theme = useTheme();
   const { accent, shape: shapeAccent } = placeAccents(place.id);
   const background = theme[accent];
   const foreground = theme[OnAccent[accent]];
+  const friendCount = friendsInterested ?? place.friends_interested;
 
   return (
     <View style={styles.card}>
@@ -103,13 +108,14 @@ export function PlaceCard({ place, actions }: PlaceCardProps) {
         icon={{ ios: 'person.2.fill', android: 'group', web: 'group' }}
         iconBackground={theme.tint}
         iconColor={theme.onTint}
-        title={friendsLine(place.friends_interested)}
+        title={friendsLine(friendCount)}
         detail={
           <ThemedText type="small" themeColor="textSecondary">
-            {place.friends_interested > 0 ? 'Plan a walk over together' : 'Be the trailblazer'}
+            {friendCount > 0 ? 'Plan a walk over together' : 'Be the trailblazer'}
           </ThemedText>
         }
       />
+      {interest}
 
       {place.hours?.length ? (
         <Section title="Hours" accent="yellow">
