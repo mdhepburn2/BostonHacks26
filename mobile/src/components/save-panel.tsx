@@ -11,6 +11,7 @@ import type { SavedInfo, SavedPlace, Visibility } from '@/api/types';
 import { Button } from '@/components/button';
 import { Loadable } from '@/components/loadable';
 import { SegmentedControl } from '@/components/segmented-control';
+import { TagPicker } from '@/components/tag-picker';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
@@ -31,17 +32,21 @@ type SavePanelProps = {
   placeName: string;
   /** `saved` from the place card: null when not saved (or logged out). */
   initial: SavedInfo | null;
+  /** Called with the server's latest state after each change (null once unsaved). */
+  onChange?: (saved: SavedInfo | null) => void;
 };
 
 /**
  * Save / Unsave, who can see it, and "I've been here" with the visit date. Each change is
  * sent straight away; the panel shows what the server sent back.
  */
-export function SavePanel({ placeId, placeName, initial }: SavePanelProps) {
+export function SavePanel({ placeId, placeName, initial, onChange }: SavePanelProps) {
   const theme = useTheme();
   const { status } = useAuth();
   const [saved, setSaved] = useState<SavedInfo | null>(initial);
-  const [busy, setBusy] = useState<'save' | 'unsave' | 'visibility' | 'visited' | null>(null);
+  const [busy, setBusy] = useState<'save' | 'unsave' | 'visibility' | 'visited' | 'tags' | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
 
   if (status !== 'signedIn') {
@@ -61,7 +66,9 @@ export function SavePanel({ placeId, placeName, initial }: SavePanelProps) {
     setError(null);
     try {
       const result = await action();
-      setSaved(result ? toInfo(result) : null);
+      const next = result ? toInfo(result) : null;
+      setSaved(next);
+      onChange?.(next);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
     } finally {
@@ -69,7 +76,7 @@ export function SavePanel({ placeId, placeName, initial }: SavePanelProps) {
     }
   };
 
-  const change = (kind: 'visibility' | 'visited', changes: SavedChanges) => {
+  const change = (kind: 'visibility' | 'visited' | 'tags', changes: SavedChanges) => {
     if (saved) void run(kind, () => updateSaved(saved.id, changes));
   };
 
@@ -146,6 +153,13 @@ export function SavePanel({ placeId, placeName, initial }: SavePanelProps) {
           change('visited', visited ? { visited_at: toIsoDate(new Date()) } : { visited: false })
         }
         onDate={(date) => change('visited', { visited_at: toIsoDate(date) })}
+      />
+
+      <TagPicker
+        selected={saved.tags ?? []}
+        busy={busy === 'tags'}
+        disabled={busy !== null}
+        onChange={(tagIds) => change('tags', { tag_ids: tagIds })}
       />
 
       {errorText}
@@ -375,8 +389,8 @@ function VisitedRow({ visited, visitedAt, busy, onToggle, onDate }: VisitedRowPr
 }
 
 function toInfo(saved: SavedPlace): SavedInfo {
-  const { id, visited, visited_at, visibility, circle_id } = saved;
-  return { id, visited, visited_at, visibility, circle_id };
+  const { id, visited, visited_at, visibility, circle_id, tags } = saved;
+  return { id, visited, visited_at, visibility, circle_id, tags };
 }
 
 const styles = StyleSheet.create({

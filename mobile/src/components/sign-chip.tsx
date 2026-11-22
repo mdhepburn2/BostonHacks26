@@ -1,7 +1,7 @@
 import { SymbolView, type SymbolViewProps } from 'expo-symbols';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { Fonts } from '@/constants/theme';
+import { Fonts, opticalCenter } from '@/constants/theme';
 
 type SignChipProps = {
   label: string;
@@ -21,10 +21,12 @@ export function SignChip({ label, background, color, icon, outline }: SignChipPr
         outline ? [styles.outline, { borderColor: color }] : { backgroundColor: background },
       ]}>
       {icon ? <SymbolView name={icon} size={12} weight="bold" tintColor={color} /> : null}
-      <Text style={[styles.label, { color }]}>{label.toUpperCase()}</Text>
+      <Text style={[styles.label, { color }, LABEL_NUDGE]}>{label.toUpperCase()}</Text>
     </View>
   );
 }
+
+const LABEL_NUDGE = opticalCenter(12);
 
 const styles = StyleSheet.create({
   chip: {

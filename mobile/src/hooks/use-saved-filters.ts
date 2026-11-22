@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import type { SavedPlace, Visibility } from '@/api/types';
+import type { SavedPlace, Tag, Visibility } from '@/api/types';
 
 export type SavedSort = 'saved' | 'visited' | 'name';
 export type VisitedFilter = 'all' | 'visited' | 'not_visited';
@@ -12,6 +12,8 @@ export type SavedFilters = {
   visibility: Visibility | 'any';
   price: string | 'any';
   type: string | 'any';
+  /** A tag id (as a string, so it works with the chip pickers), or 'any'. */
+  tag: string | 'any';
 };
 
 export const DEFAULT_FILTERS: SavedFilters = {
@@ -21,6 +23,7 @@ export const DEFAULT_FILTERS: SavedFilters = {
   visibility: 'any',
   price: 'any',
   type: 'any',
+  tag: 'any',
 };
 
 /** Google types that are on nearly everything, so they're no use as a filter. */
@@ -30,7 +33,7 @@ const MAX_TYPES = 8;
 /** Filter state for the Saved tab, plus how many filters (not search or sort) are on. */
 export function useSavedFilters() {
   const [filters, setFilters] = useState<SavedFilters>(DEFAULT_FILTERS);
-  const activeCount = (['visited', 'visibility', 'price', 'type'] as const).filter(
+  const activeCount = (['visited', 'visibility', 'price', 'type', 'tag'] as const).filter(
     (key) => filters[key] !== DEFAULT_FILTERS[key],
   ).length;
 
@@ -55,7 +58,8 @@ export function applySavedFilters(items: SavedPlace[], f: SavedFilters): SavedPl
       (f.visited === 'all' || item.visited === (f.visited === 'visited')) &&
       (f.visibility === 'any' || item.visibility === f.visibility) &&
       (f.price === 'any' || item.place.price_range === f.price) &&
-      (f.type === 'any' || item.place.types.includes(f.type)),
+      (f.type === 'any' || item.place.types.includes(f.type)) &&
+      (f.tag === 'any' || item.tags.some((tag) => String(tag.id) === f.tag)),
   );
 
   const byNewestSave = (a: SavedPlace, b: SavedPlace) => b.created_at.localeCompare(a.created_at);
@@ -68,6 +72,13 @@ export function applySavedFilters(items: SavedPlace[], f: SavedFilters): SavedPl
     }
     return byNewestSave(a, b);
   });
+}
+
+/** My tags that are on at least one place in the list, A to Z. */
+export function tagOptions(items: SavedPlace[]): Tag[] {
+  const tags = new Map<number, Tag>();
+  for (const item of items) for (const tag of item.tags) tags.set(tag.id, tag);
+  return [...tags.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Price ranges that appear in the list, cheapest first. */

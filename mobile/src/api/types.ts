@@ -16,12 +16,16 @@ export type SavedInfo = {
   visited_at: string | null;
   visibility: Visibility;
   circle_id: number | null;
+  /** My tags on it, A to Z. */
+  tags: Tag[];
 };
 
 /** GET /api/places/<id>/ */
 export type PlaceDetail = {
   id: number;
   name: string;
+  /** Street address; '' for Wikipedia-only places. Never repeated in the bio. */
+  address: string;
   bio: string;
   rating: number | null;
   rating_count: number | null;
@@ -29,6 +33,8 @@ export type PlaceDetail = {
   hours: string[] | null;
   nearest_t: NearestT | null;
   friends_interested: number;
+  /** The friends counted in friends_interested, A to Z. [] when logged out. */
+  interested_friends: UserSummary[];
   /** Whether I've marked interest. Always false when logged out. */
   interested: boolean;
   saved: SavedInfo | null;
@@ -45,6 +51,17 @@ export type PlaceSummary = {
 export type Tag = {
   id: number;
   name: string;
+};
+
+/** One item from GET /api/tags/, and the POST / PATCH /api/tags/ response. */
+export type TagWithCount = Tag & {
+  /** How many of my saved places have it. */
+  count: number;
+};
+
+/** GET /api/tags/: my tags, A to Z. */
+export type TagsResponse = {
+  results: TagWithCount[];
 };
 
 /** The place inside a saved place. price_range is only known once its card has been opened. */
@@ -183,6 +200,7 @@ export type InterestResponse = {
   /** The friend's saved place this interest came from, if any. */
   via_saved_place_id: number | null;
   friends_interested: number;
+  interested_friends: UserSummary[];
 };
 
 /** GET /api/friends/: my friends, A to Z. */

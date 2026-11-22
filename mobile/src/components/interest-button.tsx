@@ -5,7 +5,7 @@ import { ActivityIndicator, Pressable, StyleSheet } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { markInterested, unmarkInterested } from '@/api/interest';
-import type { PlaceDetail } from '@/api/types';
+import type { PlaceDetail, UserSummary } from '@/api/types';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
@@ -17,6 +17,8 @@ export type InterestVia = { savedPlaceId: number; friend: string };
 export type InterestState = {
   interested: boolean;
   friendsInterested: number;
+  /** The friends counted in friendsInterested, A to Z. */
+  interestedFriends: UserSummary[];
   busy: boolean;
   error: string | null;
   toggle: () => void;
@@ -29,6 +31,7 @@ export type InterestState = {
 export function useInterest(place: PlaceDetail, via?: InterestVia): InterestState {
   const [interested, setInterested] = useState(place.interested);
   const [friendsInterested, setFriendsInterested] = useState(place.friends_interested);
+  const [interestedFriends, setInterestedFriends] = useState(place.interested_friends ?? []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,6 +55,7 @@ export function useInterest(place: PlaceDetail, via?: InterestVia): InterestStat
         }
         setInterested(true);
         setFriendsInterested(result.friends_interested);
+        setInterestedFriends(result.interested_friends ?? []);
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
@@ -60,7 +64,14 @@ export function useInterest(place: PlaceDetail, via?: InterestVia): InterestStat
     }
   };
 
-  return { interested, friendsInterested, busy, error, toggle: () => void toggle() };
+  return {
+    interested,
+    friendsInterested,
+    interestedFriends,
+    busy,
+    error,
+    toggle: () => void toggle(),
+  };
 }
 
 /** "Interested" pill: outlined when off, filled with a check when on. Logged out → login. */

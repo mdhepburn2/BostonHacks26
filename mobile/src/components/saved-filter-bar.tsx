@@ -1,6 +1,6 @@
 import { SymbolView } from 'expo-symbols';
 import { useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import type { SavedPlace, Visibility } from '@/api/types';
 import { ChoiceChips } from '@/components/choice-chips';
@@ -9,6 +9,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Fonts, Spacing } from '@/constants/theme';
 import {
   priceOptions,
+  tagOptions,
   typeLabel,
   typeOptions,
   type SavedSort,
@@ -51,6 +52,9 @@ export function SavedFilterBar({ state, items }: SavedFilterBarProps) {
 
   const prices = priceOptions(items);
   const types = typeOptions(items);
+  const tags = tagOptions(items);
+  // A filter on a tag that's since been removed from every place would hide everything.
+  const tagFilter = tags.some((tag) => String(tag.id) === filters.tag) ? filters.tag : 'any';
 
   return (
     <View style={styles.bar}>
@@ -80,6 +84,49 @@ export function SavedFilterBar({ state, items }: SavedFilterBarProps) {
           ) : null}
         </Pressable>
       </View>
+
+      {tags.length ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.tagScroll}
+          contentContainerStyle={styles.tagRow}
+          accessibilityRole="radiogroup"
+          accessibilityLabel="Filter by tag">
+          {[{ id: 'any', name: 'All tags' }, ...tags.map((t) => ({ id: String(t.id), name: t.name }))].map(
+            (tag) => {
+              const selected = tagFilter === tag.id;
+              return (
+                <Pressable
+                  key={tag.id}
+                  onPress={() => set('tag', selected && tag.id !== 'any' ? 'any' : tag.id)}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: selected }}
+                  style={({ pressed }) => [
+                    styles.tagChip,
+                    selected
+                      ? { backgroundColor: theme.text, borderColor: theme.text }
+                      : { borderColor: theme.backgroundSelected },
+                    pressed && styles.pressed,
+                  ]}>
+                  {tag.id === 'any' ? null : (
+                    <SymbolView
+                      name={{ ios: 'tag.fill', android: 'sell', web: 'sell' }}
+                      size={12}
+                      tintColor={selected ? theme.background : theme.textSecondary}
+                    />
+                  )}
+                  <ThemedText
+                    type="smallBold"
+                    style={{ color: selected ? theme.background : theme.text }}>
+                    {tag.name}
+                  </ThemedText>
+                </Pressable>
+              );
+            },
+          )}
+        </ScrollView>
+      ) : null}
 
       {open ? (
         <View style={[styles.panel, { borderColor: theme.backgroundSelected }]}>
@@ -157,6 +204,23 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.bodySemiBold,
     fontSize: 11,
     lineHeight: 14,
+  },
+  // Run the tag row edge to edge, so chips scroll out from under the screen's padding.
+  tagScroll: {
+    marginHorizontal: -Spacing.three,
+  },
+  tagRow: {
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.three,
+  },
+  tagChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+    minHeight: 36,
+    paddingHorizontal: Spacing.three,
+    borderRadius: 18,
+    borderWidth: 2,
   },
   panel: {
     gap: Spacing.three,

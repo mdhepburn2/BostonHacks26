@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import type { Activity } from '@/api/types';
 import { SignChip } from '@/components/sign-chip';
@@ -34,12 +34,12 @@ export function ActivityRow({ activity, myId }: { activity: Activity; myId: numb
       ]}>
       {/* A calendar-page date block, yellow for plans (grey once it's happened). */}
       <View style={[styles.date, { backgroundColor: past ? theme.backgroundSelected : theme.yellow }]}>
-        <Text style={[styles.month, { color: past ? theme.textSecondary : theme.onYellow }]}>
+        <ThemedText style={[styles.month, { color: past ? theme.textSecondary : theme.onYellow }]}>
           {start.toLocaleDateString('en-US', { month: 'short' }).toUpperCase()}
-        </Text>
-        <Text style={[styles.day, { color: past ? theme.text : theme.onYellow }]}>
+        </ThemedText>
+        <ThemedText style={[styles.day, { color: past ? theme.text : theme.onYellow }]}>
           {start.getDate()}
-        </Text>
+        </ThemedText>
       </View>
 
       <View style={styles.text}>

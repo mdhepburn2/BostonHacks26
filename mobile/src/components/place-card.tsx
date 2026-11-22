@@ -1,8 +1,8 @@
 import { SymbolView, type SymbolViewProps } from 'expo-symbols';
 import { type ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, View } from 'react-native';
 
-import type { PlaceDetail } from '@/api/types';
+import type { PlaceDetail, SavedInfo, UserSummary } from '@/api/types';
 import { Crosswalk } from '@/components/crosswalk';
 import { Section } from '@/components/section';
 import { SignChip } from '@/components/sign-chip';
@@ -20,16 +20,31 @@ type PlaceCardProps = {
   actions?: ReactNode;
   /** Live count after marking interest; defaults to the card's own count. */
   friendsInterested?: number;
+  /** Live list of those friends; defaults to the card's own list. */
+  interestedFriends?: UserSummary[];
+  /** My saved place as it is now (it changes from the Save panel); defaults to the card's. */
+  saved?: SavedInfo | null;
   /** Shown under the "friends want to go" row, e.g. the Interested button. */
   interest?: ReactNode;
 };
 
-export function PlaceCard({ place, actions, friendsInterested, interest }: PlaceCardProps) {
+export function PlaceCard({
+  place,
+  actions,
+  friendsInterested,
+  interestedFriends,
+  saved: liveSaved,
+  interest,
+}: PlaceCardProps) {
   const theme = useTheme();
   const { accent, shape: shapeAccent } = placeAccents(place.id);
   const background = theme[accent];
   const foreground = theme[OnAccent[accent]];
   const friendCount = friendsInterested ?? place.friends_interested;
+  // `?? []` / `?? ''`: an API deploy older than these fields leaves them out.
+  const friends = interestedFriends ?? place.interested_friends ?? [];
+  const saved = liveSaved === undefined ? place.saved : liveSaved;
+  const address = splitAddress(place.address ?? '');
 
   return (
     <View style={styles.card}>
@@ -38,11 +53,21 @@ export function PlaceCard({ place, actions, friendsInterested, interest }: Place
         <View style={[styles.ring, { borderColor: foreground }]} />
 
         <View style={styles.heroTop}>
-          {place.price_range ? (
-            <SignChip label={place.price_range} background={foreground} color={background} />
-          ) : (
-            <View />
-          )}
+          <View style={styles.heroChips}>
+            {place.price_range ? (
+              <SignChip label={place.price_range} background={foreground} color={background} />
+            ) : null}
+            {saved?.visited ? (
+              <SignChip
+                label={saved.visited_at ? `Visited ${shortDate(saved.visited_at)}` : 'Visited'}
+                background={foreground}
+                color={background}
+                icon={{ ios: 'checkmark', android: 'check', web: 'check' }}
+              />
+            ) : saved ? (
+              <SignChip label="Want to go" background={background} color={foreground} outline />
+            ) : null}
+          </View>
           <SymbolView
             name={{ ios: 'figure.walk', android: 'directions_walk', web: 'directions_walk' }}
             size={28}
@@ -76,6 +101,32 @@ export function PlaceCard({ place, actions, friendsInterested, interest }: Place
 
       <Crosswalk />
 
+      {address ? (
+        <SignRow
+          icon={{ ios: 'mappin.and.ellipse', android: 'place', web: 'place' }}
+          iconBackground={theme.text}
+          iconColor={theme.background}
+          title={address.street}
+          detail={
+            address.rest ? (
+              <ThemedText type="small" themeColor="textSecondary">
+                {address.rest}
+              </ThemedText>
+            ) : null
+          }
+          trailing={
+            <SymbolView
+              name={{ ios: 'arrow.up.right', android: 'open_in_new', web: 'open_in_new' }}
+              size={16}
+              weight="semibold"
+              tintColor={theme.textSecondary}
+            />
+          }
+          onPress={() => openInMaps(place.name, place.address)}
+          accessibilityLabel={`Address: ${place.address}. Opens in Maps.`}
+        />
+      ) : null}
+
       {place.nearest_t ? (
         <SignRow
           icon={{ ios: 'tram.fill', android: 'tram', web: 'tram' }}
@@ -108,7 +159,7 @@ export function PlaceCard({ place, actions, friendsInterested, interest }: Place
         icon={{ ios: 'person.2.fill', android: 'group', web: 'group' }}
         iconBackground={theme.tint}
         iconColor={theme.onTint}
-        title={friendsLine(friendCount)}
+        title={friendsLine(friendCount, friends)}
         detail={
           <ThemedText type="small" themeColor="textSecondary">
             {friendCount > 0 ? 'Plan a walk over together' : 'Be the trailblazer'}
@@ -126,9 +177,56 @@ export function PlaceCard({ place, actions, friendsInterested, interest }: Place
   );
 }
 
-function friendsLine(count: number) {
+/** How many names to list before "and N others". */
+const MAX_NAMED_FRIENDS = 3;
+
+/** "sam wants to go", "sam and maya want to go", "sam, maya, jo and 2 others want to go". */
+function friendsLine(count: number, friends: UserSummary[]) {
   if (count === 0) return 'No friends want to go yet';
-  return count === 1 ? '1 friend wants to go' : `${count} friends want to go`;
+  const names = friends.map((f) => f.username);
+  if (!names.length) {
+    return count === 1 ? '1 friend wants to go' : `${count} friends want to go`;
+  }
+  const verb = count === 1 ? 'wants' : 'want';
+  const shown = names.slice(0, names.length > MAX_NAMED_FRIENDS + 1 ? MAX_NAMED_FRIENDS : names.length);
+  const others = Math.max(count - shown.length, 0);
+  if (others > 0) {
+    return `${shown.join(', ')} and ${others} ${others === 1 ? 'other' : 'others'} ${verb} to go`;
+  }
+  if (shown.length === 1) return `${shown[0]} ${verb} to go`;
+  return `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]} ${verb} to go`;
+}
+
+/** "139 Tremont St, Boston, MA 02111, USA" → street "139 Tremont St", rest "Boston, MA 02111". */
+function splitAddress(address: string) {
+  const parts = address
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (!parts.length) return null;
+  if (parts.length > 1 && /^(USA|United States)$/i.test(parts[parts.length - 1])) parts.pop();
+  const [street, ...rest] = parts;
+  return { street, rest: rest.join(', ') };
+}
+
+function openInMaps(name: string, address: string) {
+  const query = encodeURIComponent(`${name}, ${address}`);
+  const url =
+    process.env.EXPO_OS === 'android'
+      ? `geo:0,0?q=${query}`
+      : `https://maps.apple.com/?q=${encodeURIComponent(name)}&address=${encodeURIComponent(address)}`;
+  void Linking.openURL(url).catch(() => {
+    // No maps app; the address is still on screen.
+  });
+}
+
+/** "2026-11-15" → "Nov 15", read as a local date so it doesn't shift a day. */
+function shortDate(isoDate: string) {
+  const [year, month, day] = isoDate.split('-').map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  });
 }
 
 type SignRowProps = {
@@ -138,12 +236,24 @@ type SignRowProps = {
   title: string;
   detail?: ReactNode;
   trailing?: ReactNode;
+  /** Makes the whole row a button, e.g. the address opens Maps. */
+  onPress?: () => void;
+  accessibilityLabel?: string;
 };
 
 /** One detail line: a coloured sign icon, a title and an optional detail and badge. */
-function SignRow({ icon, iconBackground, iconColor, title, detail, trailing }: SignRowProps) {
-  return (
-    <View style={styles.signRow}>
+function SignRow({
+  icon,
+  iconBackground,
+  iconColor,
+  title,
+  detail,
+  trailing,
+  onPress,
+  accessibilityLabel,
+}: SignRowProps) {
+  const content = (
+    <>
       <View style={[styles.signIcon, { backgroundColor: iconBackground }]}>
         <SymbolView name={icon} size={20} tintColor={iconColor ?? '#FFFFFF'} />
       </View>
@@ -152,7 +262,18 @@ function SignRow({ icon, iconBackground, iconColor, title, detail, trailing }: S
         {detail}
       </View>
       {trailing}
-    </View>
+    </>
+  );
+
+  if (!onPress) return <View style={styles.signRow}>{content}</View>;
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="link"
+      accessibilityLabel={accessibilityLabel}
+      style={({ pressed }) => [styles.signRow, pressed && { opacity: 0.6 }]}>
+      {content}
+    </Pressable>
   );
 }
 
@@ -217,6 +338,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
+  },
+  heroChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.one,
+    flexShrink: 1,
   },
   heroBottom: {
     gap: Spacing.two,

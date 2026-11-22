@@ -24,6 +24,19 @@ export const Colors = {
     onYellow: '#151515',
     green: '#1FA35B',
     onGreen: '#FFFFFF',
+    // Extra place-card colours, so a list of saved places isn't just four colours on repeat.
+    orange: '#F2801F',
+    onOrange: '#151515',
+    purple: '#7A4FD8',
+    onPurple: '#FFFFFF',
+    teal: '#0F8F8C',
+    onTeal: '#FFFFFF',
+    pink: '#E2508F',
+    onPink: '#FFFFFF',
+    navy: '#1C2F5E',
+    onNavy: '#FFFFFF',
+    sky: '#6CC4F2',
+    onSky: '#151515',
   },
   dark: {
     text: '#F5F5F2',
@@ -39,14 +52,29 @@ export const Colors = {
     onYellow: '#151515',
     green: '#2BB868',
     onGreen: '#FFFFFF',
+    orange: '#F58D33',
+    onOrange: '#151515',
+    purple: '#8D66E6',
+    onPurple: '#FFFFFF',
+    teal: '#16A3A0',
+    onTeal: '#FFFFFF',
+    pink: '#EC6299',
+    onPink: '#FFFFFF',
+    navy: '#2C4380',
+    onNavy: '#FFFFFF',
+    sky: '#7ACCF5',
+    onSky: '#151515',
   },
 } as const;
 
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 
-/** The strong colours, for things that pick one (place cards, icons, section markers). */
+/** The strong colours, for things that pick one (icons, section markers, avatars). */
 export const AccentKeys = ['tint', 'blue', 'yellow', 'green'] as const;
 export type Accent = (typeof AccentKeys)[number];
+
+/** Every colour a place card can be: the four sign colours plus the extra card colours. */
+export type PlaceAccent = Accent | 'orange' | 'purple' | 'teal' | 'pink' | 'navy' | 'sky';
 
 /** The text/icon colour that reads on each accent. */
 export const OnAccent = {
@@ -54,14 +82,31 @@ export const OnAccent = {
   blue: 'onBlue',
   yellow: 'onYellow',
   green: 'onGreen',
-} as const satisfies Record<Accent, ThemeColor>;
+  orange: 'onOrange',
+  purple: 'onPurple',
+  teal: 'onTeal',
+  pink: 'onPink',
+  navy: 'onNavy',
+  sky: 'onSky',
+} as const satisfies Record<PlaceAccent, ThemeColor>;
+
+/** Hand-picked (card colour, decorative shape colour) pairs, so every combination looks good. */
+const PLACE_PALETTES: readonly { accent: PlaceAccent; shape: PlaceAccent }[] = [
+  { accent: 'tint', shape: 'yellow' },
+  { accent: 'blue', shape: 'green' },
+  { accent: 'yellow', shape: 'tint' },
+  { accent: 'green', shape: 'blue' },
+  { accent: 'orange', shape: 'navy' },
+  { accent: 'purple', shape: 'pink' },
+  { accent: 'teal', shape: 'yellow' },
+  { accent: 'pink', shape: 'orange' },
+  { accent: 'navy', shape: 'sky' },
+  { accent: 'sky', shape: 'tint' },
+];
 
 /** A place's colour pair (main block + decorative shape), fixed by its id so it never changes. */
 export function placeAccents(id: number) {
-  return {
-    accent: AccentKeys[id % AccentKeys.length],
-    shape: AccentKeys[(id + 2) % AccentKeys.length],
-  };
+  return PLACE_PALETTES[id % PLACE_PALETTES.length];
 }
 
 /** MBTA line colours, so "nearest T" badges match the signs people see on the street. */
@@ -97,6 +142,20 @@ export const Fonts = {
   bodySemiBold: 'Inter_600SemiBold',
   mono: Platform.select({ ios: 'ui-monospace', web: 'var(--font-mono)', default: 'monospace' }),
 } as const;
+
+/**
+ * Overpass's font metrics sit its capitals about 0.1em above the middle of the line box
+ * (Inter's are centred), so Overpass text in a chip, avatar or button looks a little high.
+ * This nudges it down by that much without changing layout. ThemedText and SignChip apply it
+ * on their own; use it for any other Overpass text in a box.
+ */
+export function opticalCenter(fontSize: number) {
+  return { transform: [{ translateY: Math.round(fontSize * 0.1 * 2) / 2 }] };
+}
+
+export function isDisplayFont(fontFamily: unknown) {
+  return typeof fontFamily === 'string' && fontFamily.startsWith('Overpass');
+}
 
 export const Spacing = {
   half: 2,

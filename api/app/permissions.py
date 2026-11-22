@@ -166,6 +166,14 @@ def friends_interested_count(user, place):
     return PlaceInterest.objects.filter(place=place, user__in=friend_ids(user)).count()
 
 
+def interested_friends(user, place):
+    """The user's accepted friends who are interested in `place`, A to Z. [] when not logged in."""
+    if user is None or not user.is_authenticated:
+        return []
+    interested = PlaceInterest.objects.filter(place=place, user__in=friend_ids(user)).values('user')
+    return list(get_user_model().objects.filter(pk__in=interested).order_by('username').values('id', 'username'))
+
+
 def saved_place_for_interest(user, saved_place_id):
     """Someone else's saved place that `user` can see and so may mark interest from, else None."""
     return visible_saved_places(user).exclude(user=user).filter(pk=saved_place_id).first()

@@ -42,8 +42,13 @@ export function PlaceTile({
 }: PlaceTileProps) {
   const theme = useTheme();
   const { accent, shape } = placeAccents(place.id);
-  const background = theme[accent];
-  const foreground = theme[OnAccent[accent]];
+  // Been there: a quiet grey card that keeps a splash of the place's colour, so the bright
+  // full-colour cards are the ones still to go.
+  const visited = saved?.visited ?? false;
+  const background = visited ? theme.backgroundElement : theme[accent];
+  const foreground = visited ? theme.text : theme[OnAccent[accent]];
+  const circleColor = visited ? theme[accent] : theme[shape];
+  const circleIcon = visited ? theme[OnAccent[accent]] : theme[OnAccent[shape]];
   const tile = variant === 'tile';
 
   return (
@@ -57,11 +62,15 @@ export function PlaceTile({
         })
       }
       accessibilityRole="button"
-      accessibilityLabel={`Open ${place.name}`}
+      accessibilityLabel={`Open ${place.name}${saved ? (visited ? ', visited' : ', want to go') : ''}`}
       style={({ pressed }) => ({ opacity: pending ? 0.5 : pressed ? 0.85 : 1 })}>
       <View style={[styles.base, tile ? styles.tile : styles.row, { backgroundColor: background }]}>
         <View
-          style={[tile ? styles.tileCircle : styles.rowCircle, { backgroundColor: theme[shape] }]}
+          style={[
+            tile ? styles.tileCircle : styles.rowCircle,
+            { backgroundColor: circleColor },
+            visited && styles.visitedCircle,
+          ]}
         />
 
         <View style={styles.top}>
@@ -83,7 +92,7 @@ export function PlaceTile({
             <SymbolView
               name={VISIBILITY_ICONS[saved.visibility]}
               size={18}
-              tintColor={theme[OnAccent[shape]]}
+              tintColor={circleIcon}
               accessibilityLabel={`Visible to: ${saved.visibility}`}
             />
           ) : null}
@@ -175,6 +184,9 @@ const styles = StyleSheet.create({
     borderRadius: 60,
     top: -44,
     right: -36,
+  },
+  visitedCircle: {
+    opacity: 0.85,
   },
   top: {
     flexDirection: 'row',

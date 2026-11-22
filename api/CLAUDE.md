@@ -166,6 +166,7 @@ Don't change these shapes without telling the frontend team. All URLs are under 
 {
   "id": 0,
   "name": "",
+  "address": "",
   "bio": "",
   "rating": 4.6,
   "rating_count": 1234,
@@ -173,10 +174,15 @@ Don't change these shapes without telling the frontend team. All URLs are under 
   "hours": ["Monday: 9:00 AM - 5:00 PM", "..."],
   "nearest_t": { "stop": "", "lines": [""], "walk_min": 0 },
   "friends_interested": 0,
+  "interested_friends": [ { "id": 0, "username": "" } ],
   "interested": false,
-  "saved": { "id": 0, "visited": false, "visited_at": null, "visibility": "private", "circle_id": null }
+  "saved": { "id": 0, "visited": false, "visited_at": null, "visibility": "private", "circle_id": null,
+             "tags": [ { "id": 0, "name": "" } ] }
 }
 ```
+- `address` is the place's street address ('' for Wikipedia-only places). The bio never repeats it; the app shows it on its own row.
+- `interested_friends` names the accepted friends counted in `friends_interested`, A to Z (`[]` when not logged in).
+- `saved.tags` are my tags on it, A to Z.
 - `rating`, `rating_count`, `price_range` and `hours` are `null` when Google has no data (common for landmarks and Wikipedia-only places).
 - `price_range` is Google's price level mapped to `"$"` through `"$$$$"`, or `null`.
 - `saved` is `null` if the user hasn't saved the place or isn't logged in.
@@ -295,7 +301,7 @@ Auth uses DRF tokens: the app sends `Authorization: Token <token>`.
 
 **Place interest:**
 - `POST /api/places/<id>/interest/` marks me interested. Optional body: `via_saved_place_id`, a friend's saved place for this same place that I'm allowed to see (`visible_saved_places`); my own, a hidden one, an unknown id or one for a different place is 400. Returns 201, or 200 with the existing interest (unchanged) if I was already interested.
-- Response: `{"interested": true, "via_saved_place_id": null, "friends_interested": 0}`, so the app can update the card without reloading it.
+- Response: `{"interested": true, "via_saved_place_id": null, "friends_interested": 0, "interested_friends": []}`, so the app can update the card without reloading it.
 - `DELETE /api/places/<id>/interest/` returns 204, including when I wasn't interested. Both are 404 for an unknown place.
 - Unsaving the saved place an interest came from keeps the interest (`via_saved_place` becomes null).
 - Interest helpers (`own_interests`, `interested_for_card`, `friends_interested_count`, `saved_place_for_interest`) live in `app/permissions.py`. The count only includes accepted friends and is checked live.

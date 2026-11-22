@@ -9,8 +9,9 @@
    A cached card with no T stop yet (MBTA failed last time, or the card is from
    before step 11) gets one on its next open.
 3. `saved` (the requester's SavedPlace), `interested` (whether the requester
-   marked interest) and `friends_interested` (how many of their accepted friends
-   did) are live per request and never cached. Logged out: null / false / 0.
+   marked interest), `friends_interested` (how many of their accepted friends
+   did) and `interested_friends` (which ones) are live per request and never
+   cached. Logged out: null / false / 0 / [].
 
 Failures never crash the request:
 - details fail     -> card keeps whatever it had (null rating/price/hours on first open)
@@ -88,7 +89,8 @@ def get_card(place, user=None):
                 place.id, place.name, need_details, need_wiki, need_mbta, card_status, timings)
     return _response(place, card, permissions.saved_for_card(user, place),
                      interested=permissions.interested_for_card(user, place),
-                     friends_interested=permissions.friends_interested_count(user, place))
+                     friends_interested=permissions.friends_interested_count(user, place),
+                     interested_friends=permissions.interested_friends(user, place))
 
 
 # --- Place details --------------------------------------------------------
@@ -210,12 +212,15 @@ def _build_card(place, nearest_t, save=True):
 
 
 def _facts(place):
-    """Everything the LLM is allowed to use when writing the bio."""
+    """Everything the LLM is allowed to use when writing the bio.
+
+    The address is left out on purpose: the card shows it on its own row, so the bio
+    shouldn't spend words on it.
+    """
     raw = place.raw_data or {}
     kind = raw.get('primaryType') or (place.types[0] if place.types else '')
     facts = {
         'name': place.name,
-        'address': place.address,
         'kind': kind.replace('_', ' '),
         'categories': [t.replace('_', ' ') for t in place.types[:6]],
         'wikipedia_summary': place.wiki_summary,
@@ -228,10 +233,11 @@ def _facts(place):
 
 # --- Response -------------------------------------------------------------
 
-def _response(place, card, saved=None, interested=False, friends_interested=0):
+def _response(place, card, saved=None, interested=False, friends_interested=0, interested_friends=()):
     return {
         'id': place.id,
         'name': place.name,
+        'address': place.address,
         'bio': card.bio,
         'rating': place.rating,
         'rating_count': place.rating_count,
@@ -239,6 +245,7 @@ def _response(place, card, saved=None, interested=False, friends_interested=0):
         'hours': place.opening_hours or None,
         'nearest_t': card.nearest_t or None,  # {} means "no T stop nearby"
         'friends_interested': friends_interested,
+        'interested_friends': list(interested_friends),
         'interested': interested,
         'saved': {
             'id': saved.id,
@@ -246,6 +253,7 @@ def _response(place, card, saved=None, interested=False, friends_interested=0):
             'visited_at': saved.visited_at,
             'visibility': saved.visibility,
             'circle_id': saved.circle_id,
+            'tags': [{'id': t.id, 'name': t.name} for t in saved.tags.order_by('name')],
         } if saved else None,
     }
 

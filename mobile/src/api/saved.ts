@@ -28,6 +28,8 @@ export type SavedChanges = {
   visibility?: Visibility;
   /** Required when visibility is "circle": a circle I belong to. */
   circle_id?: number;
+  /** Replaces the whole set of tags (my own tag ids); [] clears them. */
+  tag_ids?: number[];
 };
 
 /** Save a place. Returns the existing saved place unchanged if it was already saved. */

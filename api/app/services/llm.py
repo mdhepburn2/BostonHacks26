@@ -80,7 +80,7 @@ Rules:
 - Use only the facts above. Do not add dates, history, names, awards or details that aren't in them, even if you think you know them.
 - 2 to 4 sentences, under 80 words. Friendly and plain, no marketing language, no emojis.
 - Don't repeat the rating, rating count or price range as numbers; the card already shows them.
-- If the facts are thin, write one or two sentences saying what kind of place it is and where it is. That's fine.
+- Don't mention the street address; the card shows it on its own line.
 """
 
 BIO_SCHEMA = {

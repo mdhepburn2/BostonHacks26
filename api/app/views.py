@@ -461,6 +461,7 @@ def place_interest(request, place_id):
         'interested': True,
         'via_saved_place_id': interest.via_saved_place_id,
         'friends_interested': permissions.friends_interested_count(request.user, place),
+        'interested_friends': permissions.interested_friends(request.user, place),
     }, status=status_code)
 
 

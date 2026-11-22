@@ -1,6 +1,6 @@
 import { Platform, StyleSheet, Text, type TextProps } from 'react-native';
 
-import { Colors, Fonts, ThemeColor } from '@/constants/theme';
+import { Colors, Fonts, ThemeColor, isDisplayFont, opticalCenter } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 export type ThemedTextProps = TextProps & {
@@ -10,8 +10,13 @@ export type ThemedTextProps = TextProps & {
 
 export function ThemedText({ style, type = 'default', themeColor, ...rest }: ThemedTextProps) {
   const theme = useTheme();
+  // Overpass sits high in its line box; centre it (see opticalCenter).
+  const flat = StyleSheet.flatten([styles[type], style]);
+  const nudge = isDisplayFont(flat?.fontFamily) ? opticalCenter(flat?.fontSize ?? 16) : null;
 
-  return <Text style={[{ color: theme[themeColor ?? 'text'] }, styles[type], style]} {...rest} />;
+  return (
+    <Text style={[{ color: theme[themeColor ?? 'text'] }, styles[type], style, nudge]} {...rest} />
+  );
 }
 
 const styles = StyleSheet.create({

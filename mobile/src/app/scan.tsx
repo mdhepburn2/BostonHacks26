@@ -3,7 +3,14 @@ import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, Pressable, StyleSheet, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Linking,
+  Pressable,
+  StyleSheet,
+  View,
+  type GestureResponderEvent,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ApiError } from '@/api/client';
@@ -12,7 +19,7 @@ import type { IdentifyResponse, PlaceSummary } from '@/api/types';
 import { Button } from '@/components/button';
 import { CandidateList } from '@/components/candidate-list';
 import { ThemedText } from '@/components/themed-text';
-import { Spacing } from '@/constants/theme';
+import { Fonts, Spacing } from '@/constants/theme';
 import { useHeading } from '@/hooks/use-heading';
 import { useLocation } from '@/hooks/use-location';
 import { useTheme } from '@/hooks/use-theme';
@@ -28,6 +35,61 @@ const MAX_CANDIDATES = 3;
 
 // The camera is always on black, in light and dark mode alike.
 const ON_CAMERA = '#FFFFFF';
+/** The Camera app's yellow for an active zoom level. */
+const ZOOM_ACTIVE = '#FFD60A';
+
+/**
+ * expo-camera's `zoom` (0 to 1) is exponential on iOS: factor = min * (max / min) ^ zoom.
+ * So a pinch that doubles the finger spread should add ln(2) / ln(max / min). Phones differ,
+ * so this assumes max / min of about 33x (e^3.5); the shown "2.0×" is approximate.
+ */
+const ZOOM_LOG_RANGE = 3.5;
+/** Past this the image is mostly digital-zoom mush and hard to aim. */
+const MAX_ZOOM = 0.75;
+
+function zoomLabel(zoom: number) {
+  const factor = Math.exp(zoom * ZOOM_LOG_RANGE);
+  return factor < 1.05 ? '1×' : `${factor.toFixed(1)}×`;
+}
+
+function touchSpread(event: GestureResponderEvent) {
+  const [a, b] = event.nativeEvent.touches;
+  if (!a || !b) return null;
+  return Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY);
+}
+
+/** Two-finger pinch over the viewfinder, like the Camera app. One finger does nothing. */
+function usePinchZoom() {
+  const [zoom, setZoom] = useState(0);
+  const pinch = useRef<{ spread: number; zoom: number } | null>(null);
+
+  const handlers = {
+    onStartShouldSetResponder: () => true,
+    onMoveShouldSetResponder: (e: GestureResponderEvent) => e.nativeEvent.touches.length >= 2,
+    onResponderTerminationRequest: () => true,
+    onResponderMove: (e: GestureResponderEvent) => {
+      const spread = touchSpread(e);
+      if (spread === null || spread < 1) {
+        pinch.current = null; // a finger lifted; start fresh when the second comes back
+        return;
+      }
+      if (!pinch.current) {
+        pinch.current = { spread, zoom };
+        return;
+      }
+      const next = pinch.current.zoom + Math.log(spread / pinch.current.spread) / ZOOM_LOG_RANGE;
+      setZoom(Math.min(MAX_ZOOM, Math.max(0, next)));
+    },
+    onResponderRelease: () => {
+      pinch.current = null;
+    },
+    onResponderTerminate: () => {
+      pinch.current = null;
+    },
+  };
+
+  return { zoom, setZoom, handlers };
+}
 
 export default function ScanScreen() {
   const insets = useSafeAreaInsets();
@@ -97,6 +159,7 @@ function Viewfinder({ coords }: { coords: Coords | null }) {
   const [ready, setReady] = useState(false);
   const [taking, setTaking] = useState(false);
   const [scan, setScan] = useState<ScanState>({ step: 'live' });
+  const { zoom, setZoom, handlers: pinchHandlers } = usePinchZoom();
   // Bumped on every new request and on retake, so a late answer for an old photo is ignored.
   const requestId = useRef(0);
   // Closing the camera mid-scan must not jump to a place card when the answer arrives later.
@@ -168,13 +231,23 @@ function Viewfinder({ coords }: { coords: Coords | null }) {
       {shot ? (
         <Image source={{ uri: shot.photoUri }} style={StyleSheet.absoluteFill} contentFit="cover" />
       ) : (
-        <CameraView
-          ref={cameraRef}
-          style={StyleSheet.absoluteFill}
-          facing="back"
-          animateShutter
-          onCameraReady={() => setReady(true)}
-        />
+        <>
+          <CameraView
+            ref={cameraRef}
+            style={StyleSheet.absoluteFill}
+            facing="back"
+            zoom={zoom}
+            animateShutter
+            onCameraReady={() => setReady(true)}
+          />
+          {/* Catches pinches over the preview; the buttons sit on top and still get taps. */}
+          <View
+            style={StyleSheet.absoluteFill}
+            {...pinchHandlers}
+            accessible
+            accessibilityLabel="Camera preview. Pinch to zoom."
+          />
+        </>
       )}
 
       {scan.step === 'result' || scan.step === 'error' ? (
@@ -204,6 +277,20 @@ function Viewfinder({ coords }: { coords: Coords | null }) {
             </View>
           ) : null}
 
+          {scan.step === 'live' ? (
+            <Pressable
+              onPress={() => setZoom(zoom > 0 ? 0 : Math.log(2) / ZOOM_LOG_RANGE)}
+              accessibilityRole="button"
+              accessibilityLabel={zoom > 0 ? `Zoom ${zoomLabel(zoom)}. Tap to reset.` : 'Zoom to 2×'}
+              hitSlop={8}
+              style={({ pressed }) => [styles.zoomPill, pressed && styles.pressed]}>
+              <ThemedText
+                style={[styles.zoomText, { color: zoom > 0 ? ZOOM_ACTIVE : ON_CAMERA }]}>
+                {zoomLabel(zoom)}
+              </ThemedText>
+            </Pressable>
+          ) : null}
+
           {scan.step === 'identifying' ? (
             <Pressable
               onPress={retake}
@@ -214,20 +301,19 @@ function Viewfinder({ coords }: { coords: Coords | null }) {
               </ThemedText>
             </Pressable>
           ) : (
+            // The Camera app's shutter: a white ring around a white disc that shrinks on press.
             <Pressable
               onPress={takePhoto}
               disabled={!canShoot}
               accessibilityRole="button"
               accessibilityLabel="Take photo"
               accessibilityState={{ disabled: !canShoot }}
-              style={({ pressed }) => [
-                styles.shutter,
-                !canShoot && styles.disabled,
-                pressed && styles.pressed,
-              ]}>
-              <View style={[styles.shutterInner, { backgroundColor: theme.tint }]}>
-                {taking ? <ActivityIndicator color={ON_CAMERA} /> : null}
-              </View>
+              style={[styles.shutter, !canShoot && styles.disabled]}>
+              {({ pressed }) => (
+                <View style={[styles.shutterInner, (pressed || taking) && styles.shutterPressed]}>
+                  {taking ? <ActivityIndicator color="#000000" /> : null}
+                </View>
+              )}
             </Pressable>
           )}
         </View>
@@ -413,9 +499,9 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   shutter: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 78,
+    height: 78,
+    borderRadius: 39,
     borderWidth: 4,
     borderColor: ON_CAMERA,
     alignItems: 'center',
@@ -425,8 +511,28 @@ const styles = StyleSheet.create({
     width: 62,
     height: 62,
     borderRadius: 31,
+    backgroundColor: ON_CAMERA,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  shutterPressed: {
+    transform: [{ scale: 0.88 }],
+    opacity: 0.85,
+  },
+  zoomPill: {
+    minWidth: 44,
+    height: 44,
+    borderRadius: 22,
+    paddingHorizontal: Spacing.two,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  zoomText: {
+    fontFamily: Fonts.bodySemiBold,
+    fontSize: 13,
+    lineHeight: 16,
+    fontVariant: ['tabular-nums'],
   },
   sheet: {
     position: 'absolute',

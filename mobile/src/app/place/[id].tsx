@@ -1,7 +1,8 @@
 import { router, useLocalSearchParams } from 'expo-router';
+import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
-import type { PlaceDetail } from '@/api/types';
+import type { PlaceDetail, SavedInfo } from '@/api/types';
 import { Button } from '@/components/button';
 import { EmptyState } from '@/components/empty-state';
 import { InterestButton, useInterest, type InterestVia } from '@/components/interest-button';
@@ -75,12 +76,23 @@ function LoadedPlace({ place, via }: { place: PlaceDetail; via?: InterestVia }) 
   const interest = useInterest(place, via);
   const theme = useTheme();
   const { status } = useAuth();
+  // Mirrors the Save panel, so the card's "Visited" chip follows it.
+  const [saved, setSaved] = useState<SavedInfo | null>(place.saved);
 
   return (
     <PlaceCard
       place={place}
-      actions={<SavePanel placeId={place.id} placeName={place.name} initial={place.saved} />}
+      saved={saved}
+      actions={
+        <SavePanel
+          placeId={place.id}
+          placeName={place.name}
+          initial={place.saved}
+          onChange={setSaved}
+        />
+      }
       friendsInterested={interest.friendsInterested}
+      interestedFriends={interest.interestedFriends}
       interest={
         <View style={styles.interest}>
           <View style={styles.interestRow}>

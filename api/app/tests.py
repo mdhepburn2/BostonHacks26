@@ -559,8 +559,8 @@ class SearchServiceTests(APITestCase):
 from .models import PlaceCard
 from .services import place_card as card_service
 
-CARD_KEYS = {'id', 'name', 'bio', 'rating', 'rating_count', 'price_range', 'hours',
-             'nearest_t', 'friends_interested', 'interested', 'saved'}
+CARD_KEYS = {'id', 'name', 'address', 'bio', 'rating', 'rating_count', 'price_range', 'hours',
+             'nearest_t', 'friends_interested', 'interested_friends', 'interested', 'saved'}
 NEAREST_T = {'stop': 'State', 'lines': ['Orange', 'Blue'], 'walk_min': 4}
 DETAILS = {
     'rating': 4.5, 'rating_count': 48210, 'price_level': 'PRICE_LEVEL_MODERATE',
@@ -1147,7 +1147,14 @@ class PlaceCardSavedTests(LoggedInTestCase):
                                           visited_at=datetime.date(2026, 3, 2))
         body = self.client.get(f'/api/places/{self.place.id}/').json()
         self.assertEqual(body['saved'], {'id': saved.id, 'visited': True, 'visited_at': '2026-03-02',
-                                         'visibility': 'private', 'circle_id': None})
+                                         'visibility': 'private', 'circle_id': None, 'tags': []})
+
+    def test_card_shows_my_tags_and_address(self, *mocks):
+        saved = SavedPlace.objects.create(user=self.user, place=self.place)
+        saved.tags.add(Tag.objects.create(owner=self.user, name='Walks'), Tag.objects.create(owner=self.user, name='Art'))
+        body = self.client.get(f'/api/places/{self.place.id}/').json()
+        self.assertEqual([t['name'] for t in body['saved']['tags']], ['Art', 'Walks'])
+        self.assertEqual(body['address'], self.place.address)
 
     def test_card_ignores_other_users_saves(self, *mocks):
         SavedPlace.objects.create(user=self.other, place=self.place)
@@ -1578,7 +1585,8 @@ class PlaceInterestTests(LoggedInTestCase):
     def test_mark_and_unmark(self, *mocks):
         response = self.client.post(self.url)
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json(), {'interested': True, 'via_saved_place_id': None, 'friends_interested': 0})
+        self.assertEqual(response.json(), {'interested': True, 'via_saved_place_id': None, 'friends_interested': 0,
+                                           'interested_friends': []})
         self.assertTrue(self.card()['interested'])
 
         self.assertEqual(self.client.delete(self.url).status_code, 204)
@@ -1637,7 +1645,20 @@ class PlaceInterestTests(LoggedInTestCase):
 
     def test_mark_response_has_friend_count(self, *mocks):
         self.interest(self.other)
-        self.assertEqual(self.client.post(self.url).json()['friends_interested'], 1)
+        body = self.client.post(self.url).json()
+        self.assertEqual(body['friends_interested'], 1)
+        self.assertEqual(body['interested_friends'], [{'id': self.other.id, 'username': self.other.username}])
+
+    def test_card_names_only_accepted_friends(self, *mocks):
+        self.interest(self.other)
+        self.interest(self.stranger)
+        self.interest(self.user)
+        self.assertEqual(self.card()['interested_friends'], [{'id': self.other.id, 'username': self.other.username}])
+        self.client.force_authenticate(None)
+        self.assertEqual(self.card()['interested_friends'], [])
+
+    def test_bio_facts_leave_out_address(self, *mocks):
+        self.assertNotIn('address', card_service._facts(self.place))
 
     # --- via a friend's saved place ---
 
