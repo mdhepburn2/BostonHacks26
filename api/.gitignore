@@ -224,3 +224,6 @@ __marimo__/
 
 # collectstatic output
 staticfiles/
+
+# Demo logins
+demo_logins.csv
