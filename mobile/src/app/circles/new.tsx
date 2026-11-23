@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { addCircleMember, createCircle } from '@/api/circles';
 import { ApiError } from '@/api/client';
@@ -18,6 +18,7 @@ import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useRequest } from '@/hooks/use-request';
 import { useTheme } from '@/hooks/use-theme';
+import { showAlert } from '@/utils/alert';
 import { announceCircleCreated } from '@/utils/circle-created';
 
 /**
@@ -82,7 +83,7 @@ export default function NewCircleScreen() {
     if (router.canGoBack()) router.back();
     else router.replace({ pathname: '/circles/[id]', params: { id: String(circle.id) } });
     if (failed.length) {
-      Alert.alert(
+      showAlert(
         `Created ${circle.name}`,
         `Couldn't add ${failed.join(', ')}. You can try again from the circle.`,
       );

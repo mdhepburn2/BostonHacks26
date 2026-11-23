@@ -1,14 +1,14 @@
-import { DateTimePicker } from '@expo/ui/community/datetime-picker';
 import { router, useFocusEffect } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { savePlace, unsave, updateSaved, type SavedChanges } from '@/api/saved';
 import { getCircles } from '@/api/circles';
 import type { SavedInfo, SavedPlace, Visibility } from '@/api/types';
 import { Button } from '@/components/button';
+import { DatePicker } from '@/components/date-picker';
 import { Loadable } from '@/components/loadable';
 import { SegmentedControl } from '@/components/segmented-control';
 import { TagPicker } from '@/components/tag-picker';
@@ -17,6 +17,7 @@ import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useRequest } from '@/hooks/use-request';
 import { useTheme } from '@/hooks/use-theme';
+import { showAlert } from '@/utils/alert';
 import { onCircleCreated } from '@/utils/circle-created';
 import { formatDate, fromIsoDate, toIsoDate } from '@/utils/dates';
 
@@ -82,7 +83,7 @@ export function SavePanel({ placeId, placeName, initial, onChange }: SavePanelPr
 
   const confirmUnsave = () => {
     if (!saved) return;
-    Alert.alert(`Remove ${placeName}?`, 'Its visit date, note and tags will be removed too.', [
+    showAlert(`Remove ${placeName}?`, 'Its visit date, note and tags will be removed too.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Remove',
@@ -360,7 +361,7 @@ function VisitedRow({ visited, visitedAt, busy, onToggle, onDate }: VisitedRowPr
               onPress={() => setAndroidPickerOpen(true)}
             />
             {androidPickerOpen ? (
-              <DateTimePicker
+              <DatePicker
                 value={date}
                 maximumDate={new Date()}
                 presentation="dialog"
@@ -374,7 +375,7 @@ function VisitedRow({ visited, visitedAt, busy, onToggle, onDate }: VisitedRowPr
             ) : null}
           </>
         ) : (
-          <DateTimePicker
+          <DatePicker
             value={date}
             maximumDate={new Date()}
             display="compact"

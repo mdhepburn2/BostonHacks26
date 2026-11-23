@@ -1,6 +1,6 @@
 import { SymbolView } from 'expo-symbols';
 import { useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { createTag, deleteTag, getTags } from '@/api/tags';
@@ -10,6 +10,7 @@ import { Fonts, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useRequest } from '@/hooks/use-request';
 import { useTheme } from '@/hooks/use-theme';
+import { showAlert } from '@/utils/alert';
 
 /** The API's limit on a tag name. */
 const MAX_TAG_LENGTH = 50;
@@ -74,7 +75,7 @@ export function TagPicker({ selected, busy, disabled, onChange }: TagPickerProps
 
   const confirmDelete = (tag: Tag) => {
     if (locked) return;
-    Alert.alert(`Delete "${tag.name}"?`, 'It comes off every place it’s on. The places stay saved.', [
+    showAlert(`Delete "${tag.name}"?`, 'It comes off every place it’s on. The places stay saved.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',

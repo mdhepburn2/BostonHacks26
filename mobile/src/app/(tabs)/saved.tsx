@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { getSaved, updateSaved, type SavedChanges } from '@/api/saved';
@@ -18,6 +18,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { useRefreshOnFocus, useRequest } from '@/hooks/use-request';
 import { applySavedFilters, useSavedFilters } from '@/hooks/use-saved-filters';
 import { useTheme } from '@/hooks/use-theme';
+import { showAlert } from '@/utils/alert';
 import { toIsoDate } from '@/utils/dates';
 
 export default function SavedScreen() {
@@ -73,7 +74,7 @@ function SavedList({ data }: { data: SavedListResponse }) {
         byId: { ...(prev.base === data ? prev.byId : {}), [item.id]: updated },
       }));
     } catch (err) {
-      Alert.alert(
+      showAlert(
         "Couldn't update that place",
         err instanceof ApiError ? err.message : 'Something went wrong. Please try again.',
       );
@@ -88,7 +89,11 @@ function SavedList({ data }: { data: SavedListResponse }) {
         accent="tint"
         icon={{ ios: 'bookmark', android: 'bookmark', web: 'bookmark' }}
         title="No saved places yet"
-        body="Open any place from Search or a scan and tap Save. It'll show up here."
+        body={
+          Platform.OS === 'web'
+            ? "Open any place from Search and tap Save. It'll show up here."
+            : "Open any place from Search or a scan and tap Save. It'll show up here."
+        }
       />
     );
   }

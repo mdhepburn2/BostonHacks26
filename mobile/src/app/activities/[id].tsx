@@ -1,7 +1,7 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useState } from 'react';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { deleteActivity, getActivity } from '@/api/activities';
 import { getCircles } from '@/api/circles';
@@ -21,6 +21,7 @@ import { OnAccent, Spacing, placeAccents } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useRefreshOnFocus, useRequest } from '@/hooks/use-request';
 import { useTheme } from '@/hooks/use-theme';
+import { showAlert } from '@/utils/alert';
 import { formatWhen, isPast } from '@/utils/dates';
 
 /** One plan: when and where, who posted it, and Interested / Going. The author can edit or delete it. */
@@ -76,7 +77,7 @@ function LoadedActivity({ initial, myId }: { initial: Activity; myId: number }) 
   const { accent } = placeAccents(activity.place.id);
 
   const confirmDelete = () => {
-    Alert.alert(`Delete "${activity.title}"?`, "Everyone's replies will be removed too.", [
+    showAlert(`Delete "${activity.title}"?`, "Everyone's replies will be removed too.", [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
@@ -89,7 +90,7 @@ function LoadedActivity({ initial, myId }: { initial: Activity; myId: number }) 
             else router.replace('/activities');
           } catch (err) {
             setDeleting(false);
-            Alert.alert(
+            showAlert(
               "Couldn't delete it",
               err instanceof ApiError ? err.message : 'Please try again.',
             );

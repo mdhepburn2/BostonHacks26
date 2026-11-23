@@ -1,6 +1,6 @@
 import { SymbolView } from 'expo-symbols';
 import { useState } from 'react';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { declineFriendRequest, getFriendRequests, sendFriendRequest, unfriend } from '@/api/social';
@@ -9,6 +9,7 @@ import { Button } from '@/components/button';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { showAlert } from '@/utils/alert';
 
 type FriendButtonProps = {
   userId: number;
@@ -60,7 +61,7 @@ export function FriendButton({ userId, username, friendship, onChanged }: Friend
     });
 
   const confirmUnfriend = () =>
-    Alert.alert(
+    showAlert(
       `Unfriend ${username}?`,
       "You'll stop seeing each other's friends-only places, and you'll each be removed from circles the other owns.",
       [

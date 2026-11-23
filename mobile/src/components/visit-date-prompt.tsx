@@ -1,11 +1,11 @@
-import { DateTimePicker } from '@expo/ui/community/datetime-picker';
 import { useState } from 'react';
 import { Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/button';
+import { DatePicker } from '@/components/date-picker';
 import { ThemedText } from '@/components/themed-text';
-import { Spacing } from '@/constants/theme';
+import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 type VisitDatePromptProps = {
@@ -24,7 +24,7 @@ export function VisitDatePrompt({ placeName, onConfirm, onCancel }: VisitDatePro
 
   if (Platform.OS === 'android') {
     return (
-      <DateTimePicker
+      <DatePicker
         value={new Date()}
         maximumDate={new Date()}
         presentation="dialog"
@@ -70,7 +70,7 @@ function CalendarSheet({
             {placeName}
           </ThemedText>
         </View>
-        <DateTimePicker
+        <DatePicker
           value={date}
           maximumDate={new Date()}
           display="inline"
@@ -102,6 +102,8 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     borderCurve: 'continuous',
+    // Centred, not full width, in a desktop browser.
+    ...(Platform.OS === 'web' && { maxWidth: MaxContentWidth, marginHorizontal: 'auto' }),
   },
   text: {
     gap: Spacing.one,

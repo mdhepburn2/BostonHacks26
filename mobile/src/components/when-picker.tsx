@@ -1,8 +1,8 @@
-import { DateTimePicker } from '@expo/ui/community/datetime-picker';
 import { useState } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 
 import { Button } from '@/components/button';
+import { DatePicker } from '@/components/date-picker';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -44,7 +44,7 @@ export function WhenPicker({ value, onChange, disabled }: WhenPickerProps) {
             onPress={() => setAndroidOpen('time')}
           />
           {androidOpen ? (
-            <DateTimePicker
+            <DatePicker
               value={value}
               mode={androidOpen}
               minimumDate={androidOpen === 'date' ? new Date() : undefined}
@@ -59,7 +59,7 @@ export function WhenPicker({ value, onChange, disabled }: WhenPickerProps) {
           ) : null}
         </View>
       ) : (
-        <DateTimePicker
+        <DatePicker
           value={value}
           mode="datetime"
           minimumDate={new Date()}

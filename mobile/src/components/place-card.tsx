@@ -211,10 +211,10 @@ function splitAddress(address: string) {
 
 function openInMaps(name: string, address: string) {
   const query = encodeURIComponent(`${name}, ${address}`);
-  const url =
-    process.env.EXPO_OS === 'android'
-      ? `geo:0,0?q=${query}`
-      : `https://maps.apple.com/?q=${encodeURIComponent(name)}&address=${encodeURIComponent(address)}`;
+  let url = `https://maps.apple.com/?q=${encodeURIComponent(name)}&address=${encodeURIComponent(address)}`;
+  if (process.env.EXPO_OS === 'android') url = `geo:0,0?q=${query}`;
+  // Apple Maps isn't a safe bet in every browser.
+  if (process.env.EXPO_OS === 'web') url = `https://www.google.com/maps/search/?api=1&query=${query}`;
   void Linking.openURL(url).catch(() => {
     // No maps app; the address is still on screen.
   });

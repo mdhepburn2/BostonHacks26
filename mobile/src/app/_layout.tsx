@@ -10,6 +10,7 @@ import { useFonts } from 'expo-font';
 import { useEffect } from 'react';
 
 import { BASE_URL, checkHealth } from '@/api/client';
+import { AlertHost } from '@/components/alert-host';
 import { Colors, Fonts } from '@/constants/theme';
 import { AuthProvider } from '@/hooks/use-auth';
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -17,6 +18,10 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 // Keep the splash screen up until the fonts are ready, so text doesn't flash in the
 // system font first.
 SplashScreen.preventAutoHideAsync();
+
+// Opening a link like /place/12 directly (or refreshing it) puts the tabs underneath, so there's
+// always a way back.
+export const unstable_settings = { anchor: '(tabs)' };
 
 // Root stack: the tab bar lives in (tabs); place cards push on top of it and
 // the camera opens as a full-screen modal.
@@ -68,7 +73,8 @@ export default function RootLayout() {
             headerTitleStyle: { color: colors.text, fontFamily: Fonts.displayBold },
             headerBackTitleStyle: { fontFamily: Fonts.bodyMedium },
           }}>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          {/* The title isn't shown; it names the back button on web. */}
+          <Stack.Screen name="(tabs)" options={{ headerShown: false, title: 'Home' }} />
           <Stack.Screen name="place/[id]" options={{ title: 'Place', headerBackTitle: 'Back' }} />
           <Stack.Screen name="user/[id]" options={{ title: 'Profile', headerBackTitle: 'Back' }} />
           <Stack.Screen name="friends" options={{ title: 'Friends', headerBackTitle: 'Back' }} />
@@ -89,6 +95,7 @@ export default function RootLayout() {
           <Stack.Screen name="login" options={{ presentation: 'modal', title: '' }} />
           <Stack.Screen name="register" options={{ presentation: 'modal', title: '' }} />
         </Stack>
+        <AlertHost />
       </ThemeProvider>
     </AuthProvider>
   );

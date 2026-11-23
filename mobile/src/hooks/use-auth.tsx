@@ -1,9 +1,9 @@
-import * as SecureStore from 'expo-secure-store';
 import { createContext, use, useEffect, useState, type ReactNode } from 'react';
 
 import * as authApi from '@/api/auth';
 import { ApiError, setAuthToken, setUnauthorizedHandler } from '@/api/client';
 import type { User } from '@/api/types';
+import { getItem, removeItem, setItem } from '@/utils/login-storage';
 
 const TOKEN_KEY = 'auth.token';
 const USER_KEY = 'auth.user';
@@ -20,8 +20,8 @@ export type AuthState = {
 const AuthContext = createContext<AuthState | null>(null);
 
 /**
- * Keeps the login (token + user) in secure storage and hands the token to the API client.
- * Wrap the app in this once, in the root layout.
+ * Keeps the login (token + user) in secure storage (localStorage on web) and hands the token to
+ * the API client. Wrap the app in this once, in the root layout.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthState['status']>('loading');
@@ -32,8 +32,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(next);
     setStatus('signedIn');
     await Promise.all([
-      SecureStore.setItemAsync(TOKEN_KEY, token),
-      SecureStore.setItemAsync(USER_KEY, JSON.stringify(next)),
+      setItem(TOKEN_KEY, token),
+      setItem(USER_KEY, JSON.stringify(next)),
     ]).catch(() => {});
   };
 
@@ -42,8 +42,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setStatus('signedOut');
     await Promise.all([
-      SecureStore.deleteItemAsync(TOKEN_KEY),
-      SecureStore.deleteItemAsync(USER_KEY),
+      removeItem(TOKEN_KEY),
+      removeItem(USER_KEY),
     ]).catch(() => {});
   };
 
@@ -52,8 +52,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     (async () => {
       const [token, savedUser] = await Promise.all([
-        SecureStore.getItemAsync(TOKEN_KEY),
-        SecureStore.getItemAsync(USER_KEY),
+        getItem(TOKEN_KEY),
+        getItem(USER_KEY),
       ]).catch(() => [null, null]);
       if (cancelled) return;
       if (!token || !savedUser) {

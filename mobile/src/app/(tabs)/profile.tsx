@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { Alert, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { getFriendRequests } from '@/api/social';
 import type { User } from '@/api/types';
@@ -13,6 +13,7 @@ import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useRefreshOnFocus, useRequest } from '@/hooks/use-request';
 import { useTheme } from '@/hooks/use-theme';
+import { showAlert } from '@/utils/alert';
 
 // My profile as other people see it, plus my friend requests, friends and circles.
 export default function ProfileScreen() {
@@ -35,7 +36,7 @@ function MyProfile({ user }: { user: User }) {
   };
 
   const confirmLogout = () =>
-    Alert.alert('Log out?', "You'll need your username and password to log back in.", [
+    showAlert('Log out?', "You'll need your username and password to log back in.", [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Log out', style: 'destructive', onPress: () => void logout() },
     ]);

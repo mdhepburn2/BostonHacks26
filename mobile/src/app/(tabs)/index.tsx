@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, View } from 'react-native';
 
 import { getActivities } from '@/api/activities';
 import { getSaved } from '@/api/saved';
@@ -92,7 +92,11 @@ function SignedInHome({ recent, feed, plans, myId }: SignedInHomeProps) {
                 accent="yellow"
                 icon={{ ios: 'bookmark', android: 'bookmark', web: 'bookmark' }}
                 title="Save your first place"
-                body="Scan something nearby or search for a place you've heard about."
+                body={
+                  Platform.OS === 'web'
+                    ? "Search for a place you've heard about."
+                    : "Scan something nearby or search for a place you've heard about."
+                }
                 action={<Button label="Search places" onPress={() => router.push('/search')} />}
               />
             )

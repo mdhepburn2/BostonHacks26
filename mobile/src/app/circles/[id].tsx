@@ -1,6 +1,6 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import {
   addCircleMember,
@@ -27,6 +27,7 @@ import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useRefreshOnFocus, useRequest } from '@/hooks/use-request';
 import { useTheme } from '@/hooks/use-theme';
+import { showAlert } from '@/utils/alert';
 
 const NO_ONE: ReadonlySet<number> = new Set();
 
@@ -90,7 +91,7 @@ function CircleDetail({ circleId, me }: { circleId: number; me: User }) {
           const isOwner = data.owner.id === me.id;
 
           const confirmRemove = (member: UserSummary) =>
-            Alert.alert(`Remove ${member.username}?`, `They won't see places shared with ${data.name} anymore.`, [
+            showAlert(`Remove ${member.username}?`, `They won't see places shared with ${data.name} anymore.`, [
               { text: 'Cancel', style: 'cancel' },
               {
                 text: 'Remove',
@@ -100,7 +101,7 @@ function CircleDetail({ circleId, me }: { circleId: number; me: User }) {
             ]);
 
           const confirmLeave = () =>
-            Alert.alert(`Leave ${data.name}?`, "You won't see places shared with it anymore.", [
+            showAlert(`Leave ${data.name}?`, "You won't see places shared with it anymore.", [
               { text: 'Cancel', style: 'cancel' },
               {
                 text: 'Leave',
@@ -121,7 +122,7 @@ function CircleDetail({ circleId, me }: { circleId: number; me: User }) {
             ]);
 
           const confirmDelete = () =>
-            Alert.alert(
+            showAlert(
               `Delete ${data.name}?`,
               'Places shared with this circle will only be visible to whoever saved them. This can’t be undone.',
               [
