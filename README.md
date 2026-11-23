@@ -101,7 +101,7 @@ All visibility checks (private / friends / circle / public) go through helpers i
 | **Database** | SQLite locally, Postgres in production |
 | **AI** | Google Gemini (vision match and bio writing, both with structured JSON output) |
 | **Data** | Google Places API (New), Wikipedia, MBTA V3 API |
-| **Hosting** | Render (gunicorn and whitenoise) |
+| **Hosting** | Vercel, with Postgres on Neon |
 
 ## Repo layout
 
@@ -189,6 +189,35 @@ npx expo start
 ```
 
 Scanning needs a real phone, because simulators have no compass. Without a heading, the API falls back to ranking candidates by distance only.
+
+---
+
+## Deploying the backend
+
+The API runs on Vercel with Postgres on [Neon](https://neon.com).
+
+1. In Vercel, import this repo as a project and set **Root Directory** to `api`. Vercel detects Django, installs from `Pipfile.lock` and runs `collectstatic` on its own.
+2. Add these environment variables before the first deploy, because the build loads Django's settings:
+
+   | Variable | Value |
+   |---|---|
+   | `DJANGO_SECRET_KEY` | a long random string |
+   | `DATABASE_URL` | Neon's **pooled** connection string (the host contains `-pooler`) |
+   | `GOOGLE_PLACES_KEY`, `LLM_API_KEY`, `MBTA_KEY`, `WIKI_CONTACT` | same as local |
+
+   Leave `DEBUG` unset. `ALLOWED_HOSTS` is only needed for hostnames Vercel doesn't know about. Set `DATABASE_URL` for **Production** only, so preview deployments can't touch real data.
+3. In the project's settings, make sure **Enable access to System Environment Variables** is on. `settings.py` uses them for `ALLOWED_HOSTS`.
+4. Check `https://<your-project>.vercel.app/api/health/`.
+
+Deploys don't run migrations. After adding one, run it from your computer with Neon's **direct** connection string (no `-pooler`), before deploying the code that needs it. This asks for the string so it stays out of your shell history (zsh):
+
+```bash
+read -rs "NEON_URL?Neon direct URL: "
+```
+
+```bash
+PIPENV_DONT_LOAD_ENV=1 DATABASE_URL="$NEON_URL" pipenv run python manage.py migrate
+```
 
 ---
 

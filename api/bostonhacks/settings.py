@@ -33,11 +33,12 @@ DEBUG = os.environ.get('DEBUG', 'False').lower() in ('1', 'true', 'yes')
 
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if h.strip()]
 
-# Render sets this to the service's public hostname (e.g. bostonhacks-api.onrender.com).
-RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
-if RENDER_EXTERNAL_HOSTNAME:
-    ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
-    CSRF_TRUSTED_ORIGINS = [f'https://{RENDER_EXTERNAL_HOSTNAME}']  # for the admin login form
+# The host's own public hostnames, set by Vercel (the production domain, this deployment
+# and its git branch) or Render. A hostname with no "https://".
+HOST_VARS = ('VERCEL_PROJECT_PRODUCTION_URL', 'VERCEL_URL', 'VERCEL_BRANCH_URL', 'RENDER_EXTERNAL_HOSTNAME')
+PUBLIC_HOSTS = [os.environ[name] for name in HOST_VARS if os.environ.get(name)]
+ALLOWED_HOSTS += PUBLIC_HOSTS
+CSRF_TRUSTED_ORIGINS = [f'https://{host}' for host in PUBLIC_HOSTS]  # for the admin login form
 
 
 # Application definition
@@ -90,11 +91,16 @@ WSGI_APPLICATION = 'bostonhacks.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
-# Uses DATABASE_URL (Postgres on Render) when set, otherwise local SQLite.
+# Uses DATABASE_URL (Postgres on Neon) when set, otherwise local SQLite.
 DATABASES = {
     'default': dj_database_url.config(
         default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
-        conn_max_age=600,
+        # Neon sleeps after 5 minutes idle and drops its connections, so don't keep them
+        # longer than that, and check one still works before reusing it.
+        conn_max_age=300,
+        conn_health_checks=True,
+        # Server-side cursors don't work through Neon's connection pooler.
+        disable_server_side_cursors=True,
     )
 }
 
@@ -141,7 +147,7 @@ STORAGES = {
     'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage'},
 }
 
-# Render terminates HTTPS at its proxy and forwards plain HTTP.
+# Vercel and Render terminate HTTPS at their proxy and forward plain HTTP.
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 
@@ -176,7 +182,7 @@ LLM_THINKING_LEVEL = os.environ.get('LLM_THINKING_LEVEL', 'minimal')
 
 
 # Logging: send app logs (including per-step timings) to the console so they
-# show up in runserver output and Render's log stream.
+# show up in runserver output and the host's log stream.
 
 REST_FRAMEWORK = {
     # JSON 500s for unexpected errors; see app/views.py.

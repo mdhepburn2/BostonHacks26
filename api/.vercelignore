@@ -1,0 +1,12 @@
+# Local files that must never be uploaded (matters when deploying with the Vercel CLI).
+.env
+.env.*
+db.sqlite3
+db.sqlite3-journal
+demo_logins.csv
+staticfiles
+.claude
+.vscode
+
+# Empty and unused; keeps Vercel from treating this as a Node project.
+package-lock.json

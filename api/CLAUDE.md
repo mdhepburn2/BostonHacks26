@@ -22,7 +22,9 @@ This repo is the **backend only**: a Django REST Framework API that the mobile a
 - django-cors-headers, python-dotenv, requests, Pillow
 - DRF TokenAuthentication for user accounts (added in Phase 2)
 - SQLite for local development, Postgres in production (via dj-database-url)
-- Deployed on Render or Railway with gunicorn
+- Deployed on Vercel (one serverless function) with Neon Postgres. `build.sh` and gunicorn are only for the old Render service.
+- Nothing may write to local disk in production, and request bodies over 4.5 MB never reach Django (Vercel's limit).
+- Deploys don't run migrations; see "Deploying the backend" in `../README.md`.
 
 ### pipenv usage
 - Add a package: `pipenv install <package>`. This updates `Pipfile` and `Pipfile.lock`; commit both.
@@ -418,7 +420,7 @@ Social rules:
 1. Project skeleton + health endpoint + `app/urls.py` wired under `/api/`
 2. Place models (Place, NearbySearchCache, TextSearchCache, PlaceCard) + admin
 3. Phase 1 endpoints returning mock data (unblocks frontend)
-4. Deploy to Render/Railway with Postgres
+4. Deploy with Postgres
 5. Google Places (nearby, text search, details) + Wikipedia services
 6. Candidate generation with caching
 7. Heading filter
